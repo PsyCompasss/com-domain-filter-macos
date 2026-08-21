@@ -305,14 +305,14 @@ class CloudflareChecker:
         except Exception:
             return False
 
-    def close(self) -> None:
+    def close(self, keep_browser: bool = False) -> None:
         try:
             if self._cdp_session:
                 try:
                     self._cdp_session.detach()
                 except Exception:
                     pass
-            if self.browser:
+            if self.browser and not keep_browser:
                 self.browser.close()
         finally:
             self.browser = None
@@ -323,7 +323,20 @@ class CloudflareChecker:
             if self._playwright:
                 self._playwright.stop()
                 self._playwright = None
-            self._close_chrome_process()
+            if keep_browser:
+                self._release_chrome_process()
+            else:
+                self._close_chrome_process()
+
+    def _release_chrome_process(self) -> None:
+        """断开自动化连接，但把用户要求保留的专用 Chrome 留在前台。"""
+        self._chrome_process = None
+        if self._chrome_log:
+            try:
+                self._chrome_log.close()
+            except Exception:
+                pass
+            self._chrome_log = None
 
     def _close_chrome_process(self) -> None:
         process = self._chrome_process

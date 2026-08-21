@@ -56,6 +56,7 @@ class SearchWorker:
         self.thread: threading.Thread | None = None
         self.checked = 0
         self.found = 0
+        self.keep_browser_open_after_stop = False
 
     @property
     def is_alive(self) -> bool:
@@ -75,7 +76,8 @@ class SearchWorker:
         self.run_gate.set()
         self.emit("status", {"message": "正在查询"})
 
-    def stop(self) -> None:
+    def stop(self, keep_browser_open: bool = True) -> None:
+        self.keep_browser_open_after_stop = keep_browser_open
         self.stop_event.set()
         self.run_gate.set()
 
@@ -85,6 +87,12 @@ class SearchWorker:
         if self.config.limit_found_enabled and self.found >= self.config.limit_found:
             return f"已找到指定的 {self.config.limit_found} 个可注册域名"
         return None
+
+    def _emit_manual_stop(self) -> None:
+        message = "已手动停止"
+        if self.keep_browser_open_after_stop:
+            message += "；Chrome浏览器保持打开"
+        self.emit("finished", {"message": message, "checked": self.checked, "found": self.found})
 
     def _next_untested(self, generator: PatternGenerator):
         for _ in range(2000):
@@ -114,6 +122,7 @@ class SearchWorker:
                 self.emit("verification", {"message": "查询网站在首次打开时要求进行安全验证。"})
                 if not checker.wait_for_verification(self.stop_event):
                     if self.stop_event.is_set():
+                        self._emit_manual_stop()
                         return
                     raise CloudflareError("等待验证超过10分钟，任务已停止。")
             self.emit("status", {"message": "正在查询"})
@@ -148,6 +157,7 @@ class SearchWorker:
                         self.emit("verification", {"message": str(exc)})
                         if not checker.wait_for_verification(self.stop_event):
                             if self.stop_event.is_set():
+                                self._emit_manual_stop()
                                 return
                             raise CloudflareError("等待验证超过10分钟，任务已停止。")
                         self.emit("status", {"message": "验证已完成，正在继续"})
@@ -191,7 +201,7 @@ class SearchWorker:
                     return
                 if self.stop_event.wait(self.config.interval_seconds):
                     break
-            self.emit("finished", {"message": "已手动停止", "checked": self.checked, "found": self.found})
+            self._emit_manual_stop()
         except (CloudflareError, PageStructureChanged, ExcelStoreError, Exception) as exc:
             if logging.getLogger().handlers:
                 logging.getLogger(__name__).exception("查询任务停止")
@@ -199,6 +209,6 @@ class SearchWorker:
         finally:
             if checker:
                 try:
-                    checker.close()
+                    checker.close(keep_browser=self.keep_browser_open_after_stop)
                 except Exception:
                     pass

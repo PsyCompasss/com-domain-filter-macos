@@ -476,8 +476,8 @@ class DomainFilterApp:
 
     def _stop(self) -> None:
         if self.worker:
-            self.worker.stop()
-            self.status_var.set("正在停止…")
+            self.worker.stop(keep_browser_open=True)
+            self.status_var.set("正在停止…Chrome将保持打开")
 
     def _set_running_buttons(self, running: bool) -> None:
         self.start_button.configure(state="disabled" if running else "normal")
@@ -615,7 +615,7 @@ class DomainFilterApp:
         if self.worker and self.worker.is_alive:
             if not messagebox.askyesno("退出软件", "查询仍在运行。是否停止查询并退出？"):
                 return
-            self.worker.stop()
+            self.worker.stop(keep_browser_open=False)
         try:
             self._save_settings()
         except Exception:

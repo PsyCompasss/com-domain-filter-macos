@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -11,14 +12,18 @@ from com_domain_filter.worker import RunConfig, SearchWorker
 
 
 class FakeChecker:
+    instances = []
+
     def __init__(self, site_url, profile_dir):
         self.site_url = site_url
+        self.keep_browser = None
+        type(self).instances.append(self)
 
     def start(self):
         pass
 
-    def close(self):
-        pass
+    def close(self, keep_browser=False):
+        self.keep_browser = keep_browser
 
     def verification_present(self):
         return False
@@ -33,6 +38,16 @@ class VerificationLoopChecker(FakeChecker):
 
     def wait_for_verification(self, stop_event):
         return True
+
+
+class BlockingChecker(FakeChecker):
+    started = threading.Event()
+    release = threading.Event()
+
+    def query(self, domain):
+        type(self).started.set()
+        type(self).release.wait(timeout=5)
+        return super().query(domain)
 
 
 class WorkerTests(unittest.TestCase):
@@ -72,8 +87,32 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(worker.checked, 2)
             self.assertEqual(worker.found, 2)
             self.assertTrue(any(kind == "finished" for kind, _ in events))
+            self.assertFalse(FakeChecker.instances[-1].keep_browser)
             workbook = load_workbook(config.excel_path)
             self.assertEqual(workbook[SHEET_NAME].max_row, 3)
+
+    def test_manual_stop_keeps_browser_open(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            events = []
+            BlockingChecker.started.clear()
+            BlockingChecker.release.clear()
+            worker = SearchWorker(
+                self.make_config(root, limit_tests=10),
+                HistoryStore(root / "state.db"),
+                lambda kind, payload: events.append((kind, payload)),
+                checker_factory=BlockingChecker,
+            )
+            worker.start()
+            self.assertTrue(BlockingChecker.started.wait(timeout=5))
+            worker.stop(keep_browser_open=True)
+            BlockingChecker.release.set()
+            worker.thread.join(timeout=5)
+
+            self.assertFalse(worker.is_alive)
+            self.assertTrue(BlockingChecker.instances[-1].keep_browser)
+            messages = [payload["message"] for kind, payload in events if kind == "finished"]
+            self.assertIn("已手动停止；Chrome浏览器保持打开", messages)
 
     def test_worker_stops_after_repeated_verification(self):
         with tempfile.TemporaryDirectory() as temp:
