@@ -2,6 +2,7 @@ import unittest
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from com_domain_filter.cloudflare import (
@@ -9,6 +10,7 @@ from com_domain_filter.cloudflare import (
     STATUS_EXACT_AVAILABLE,
     STATUS_EXACT_UNAVAILABLE,
     STATUS_NO_COM,
+    CloudflareChecker,
     classify_response,
     find_system_chrome,
 )
@@ -22,6 +24,40 @@ class CloudflareClassificationTests(unittest.TestCase):
             executable.chmod(0o755)
             with patch.dict(os.environ, {"COM_DOMAIN_FILTER_CHROME_PATH": str(executable)}):
                 self.assertEqual(find_system_chrome(), executable)
+
+    def test_existing_dedicated_chrome_is_found_by_profile_and_debug_port(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profile = Path(temp) / "profile with spaces"
+            checker = CloudflareChecker("https://example.com/", profile)
+            command = (
+                f"4321 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome "
+                f"--user-data-dir={profile} --remote-debugging-port=45678 --new-window"
+            )
+            with (
+                patch(
+                    "com_domain_filter.cloudflare.subprocess.run",
+                    return_value=SimpleNamespace(stdout=command),
+                ),
+                patch.object(checker, "_debug_endpoint_available", return_value=True),
+            ):
+                self.assertEqual(checker._find_existing_chrome(), (4321, 45678))
+
+    def test_existing_chrome_without_live_debug_endpoint_is_not_reused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profile = Path(temp) / "profile"
+            checker = CloudflareChecker("https://example.com/", profile)
+            command = (
+                f"4321 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome "
+                f"--user-data-dir={profile} --remote-debugging-port=45678 --new-window"
+            )
+            with (
+                patch(
+                    "com_domain_filter.cloudflare.subprocess.run",
+                    return_value=SimpleNamespace(stdout=command),
+                ),
+                patch.object(checker, "_debug_endpoint_available", return_value=False),
+            ):
+                self.assertIsNone(checker._find_existing_chrome())
 
     def test_exact_available(self):
         payload = {

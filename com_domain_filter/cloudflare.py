@@ -125,10 +125,13 @@ class CloudflareChecker:
         self.context = None
         self.page = None
         self._chrome_process: subprocess.Popen | None = None
+        self._chrome_pid: int | None = None
         self._chrome_log = None
-        self._pid_file = self.profile_dir.parent / "chrome-browser.pid"
+        self._pid_file = self.profile_dir / "chrome-browser.pid"
+        self._port_file = self.profile_dir / "chrome-browser.port"
         self._cdp_session = None
         self._window_id: int | None = None
+        self._reused_existing = False
 
     def start(self) -> None:
         try:
@@ -142,31 +145,58 @@ class CloudflareChecker:
         if not chrome_path:
             raise CloudflareError("没有找到系统 Google Chrome，请先安装 Chrome 后再查询。")
         logging.getLogger(__name__).info("使用系统 Google Chrome：%s", chrome_path)
-        self._stop_stale_chrome()
-        port = _available_local_port()
-        log_path = self.profile_dir.parent / "chrome-browser.log"
-        self._chrome_log = log_path.open("a", encoding="utf-8")
-        command = [
-            str(chrome_path),
-            f"--user-data-dir={self.profile_dir}",
-            f"--remote-debugging-port={port}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--new-window",
-            self.site_url,
-        ]
-        try:
-            self._chrome_process = subprocess.Popen(
-                command,
-                stdout=self._chrome_log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
+        existing = self._find_existing_chrome()
+        if existing:
+            self._chrome_pid, port = existing
+            self._reused_existing = True
+            self._write_session_files(port)
+            logging.getLogger(__name__).info(
+                "重新连接现有专用 Chrome：pid=%s，port=%s",
+                self._chrome_pid,
+                port,
             )
-            self._pid_file.write_text(str(self._chrome_process.pid), encoding="utf-8")
-            self._wait_for_debug_endpoint(port)
-        except Exception as exc:
-            self._close_chrome_process()
-            raise CloudflareError(f"无法启动系统 Google Chrome：{exc}") from exc
+        else:
+            self._stop_stale_chrome()
+            port = _available_local_port()
+            log_path = self.profile_dir.parent / "chrome-browser.log"
+            self._chrome_log = log_path.open("a", encoding="utf-8")
+            command = [
+                str(chrome_path),
+                f"--user-data-dir={self.profile_dir}",
+                f"--remote-debugging-port={port}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--new-window",
+                self.site_url,
+            ]
+            try:
+                self._chrome_process = subprocess.Popen(
+                    command,
+                    stdout=self._chrome_log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                self._chrome_pid = self._chrome_process.pid
+                self._write_session_files(port)
+                self._wait_for_debug_endpoint(port)
+            except Exception as exc:
+                # Chrome 遇到相同资料目录时，可能把新请求转交给已经存在的窗口，
+                # 随后让刚启动的进程退出。此时应连接旧窗口，不能误报启动失败。
+                delegated = self._find_existing_chrome()
+                if delegated:
+                    self._chrome_process = None
+                    self._chrome_pid, port = delegated
+                    self._reused_existing = True
+                    self._write_session_files(port)
+                    self._close_chrome_log()
+                    logging.getLogger(__name__).info(
+                        "新进程已转交给现有专用 Chrome：pid=%s，port=%s",
+                        self._chrome_pid,
+                        port,
+                    )
+                else:
+                    self._close_chrome_process()
+                    raise CloudflareError(f"无法启动系统 Google Chrome：{exc}") from exc
         try:
             self._playwright = sync_playwright().start()
             self.browser = self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
@@ -183,7 +213,10 @@ class CloudflareChecker:
             if self._playwright:
                 self._playwright.stop()
             self._playwright = None
-            self._close_chrome_process()
+            if self._reused_existing:
+                self._release_chrome_process()
+            else:
+                self._close_chrome_process()
             raise CloudflareError(f"无法连接系统 Google Chrome：{exc}") from exc
         try:
             if self.page.url.rstrip("/") != self.site_url.rstrip("/"):
@@ -216,30 +249,70 @@ class CloudflareChecker:
             time.sleep(0.2)
         raise CloudflareError(f"等待 Google Chrome 启动超时：{last_error or '未知原因'}")
 
-    def _stop_stale_chrome(self) -> None:
-        if not self._pid_file.exists():
-            return
+    @staticmethod
+    def _debug_endpoint_available(port: int) -> bool:
         try:
-            pid = int(self._pid_file.read_text(encoding="utf-8").strip())
-            command = subprocess.run(
-                ["ps", "-p", str(pid), "-o", "command="],
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as response:
+                return response.status == 200
+        except Exception:
+            return False
+
+    def _matching_chrome_processes(self) -> list[tuple[int, str]]:
+        try:
+            output = subprocess.run(
+                ["ps", "-axo", "pid=,command="],
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=3,
+                timeout=5,
             ).stdout
-            if str(self.profile_dir) in command and "Google Chrome" in command:
+        except Exception:
+            return []
+        marker = f"--user-data-dir={self.profile_dir}"
+        matches = []
+        for line in output.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            pid_text, _, command = stripped.partition(" ")
+            if (
+                pid_text.isdigit()
+                and marker in command
+                and "Google Chrome" in command
+                and "--type=" not in command
+            ):
+                matches.append((int(pid_text), command))
+        return matches
+
+    def _find_existing_chrome(self) -> tuple[int, int] | None:
+        for pid, command in self._matching_chrome_processes():
+            port_match = re.search(r"--remote-debugging-port=(\d+)", command)
+            if not port_match:
+                continue
+            port = int(port_match.group(1))
+            if self._debug_endpoint_available(port):
+                return pid, port
+        return None
+
+    def _write_session_files(self, port: int) -> None:
+        if self._chrome_pid is not None:
+            self._pid_file.write_text(str(self._chrome_pid), encoding="utf-8")
+        self._port_file.write_text(str(port), encoding="utf-8")
+
+    def _stop_stale_chrome(self) -> None:
+        for pid, _command in self._matching_chrome_processes():
+            try:
                 os.kill(pid, 15)
-                for _ in range(20):
+                for _ in range(50):
                     try:
                         os.kill(pid, 0)
                     except ProcessLookupError:
                         break
                     time.sleep(0.1)
-        except Exception:
-            pass
-        finally:
-            self._pid_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+        self._pid_file.unlink(missing_ok=True)
+        self._port_file.unlink(missing_ok=True)
 
     @staticmethod
     def _run_applescript(script: str) -> None:
@@ -278,10 +351,10 @@ class CloudflareChecker:
                 self.page.bring_to_front()
             except Exception:
                 pass
-        if self._chrome_process and self._chrome_process.poll() is None:
+        if self._chrome_pid is not None:
             self._run_applescript(
                 'tell application "System Events" to set frontmost of first process whose unix id is '
-                + str(self._chrome_process.pid)
+                + str(self._chrome_pid)
                 + " to true"
             )
 
@@ -331,23 +404,37 @@ class CloudflareChecker:
     def _release_chrome_process(self) -> None:
         """断开自动化连接，但把用户要求保留的专用 Chrome 留在前台。"""
         self._chrome_process = None
-        if self._chrome_log:
-            try:
-                self._chrome_log.close()
-            except Exception:
-                pass
-            self._chrome_log = None
+        self._close_chrome_log()
 
     def _close_chrome_process(self) -> None:
         process = self._chrome_process
         self._chrome_process = None
+        pid = self._chrome_pid
+        self._chrome_pid = None
         if process and process.poll() is None:
             try:
                 process.terminate()
                 process.wait(timeout=5)
             except Exception:
                 logging.getLogger(__name__).warning("无法正常关闭专用 Chrome 进程", exc_info=True)
+        elif pid is not None:
+            try:
+                command = subprocess.run(
+                    ["ps", "-p", str(pid), "-o", "command="],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                ).stdout
+                if str(self.profile_dir) in command and "Google Chrome" in command:
+                    os.kill(pid, 15)
+            except Exception:
+                logging.getLogger(__name__).warning("无法关闭重新连接的专用 Chrome 进程", exc_info=True)
         self._pid_file.unlink(missing_ok=True)
+        self._port_file.unlink(missing_ok=True)
+        self._close_chrome_log()
+
+    def _close_chrome_log(self) -> None:
         if self._chrome_log:
             try:
                 self._chrome_log.close()
