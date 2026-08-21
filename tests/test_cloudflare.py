@@ -32,26 +32,26 @@ class CloudflareClassificationTests(unittest.TestCase):
 
     def test_exact_unavailable(self):
         payload = {
-            "check_result": {"name": "musa.com", "available": False, "can_register": False},
-            "domains": [{"name": "musa.com", "availability": "registered"}],
+            "check_result": {"name": "abc.com", "available": False, "can_register": False},
+            "domains": [{"name": "abc.com", "availability": "registered"}],
         }
-        self.assertEqual(classify_response("musa.com", payload).status, STATUS_EXACT_UNAVAILABLE)
+        self.assertEqual(classify_response("abc.com", payload).status, STATUS_EXACT_UNAVAILABLE)
 
     def test_available_but_mismatch(self):
         payload = {
             "check_result": {"name": "", "available": False, "can_register": False},
-            "domains": [{"name": "musa-new.com", "availability": "available"}],
+            "domains": [{"name": "abc-new.com", "availability": "available"}],
         }
-        result = classify_response("musa.com", payload)
+        result = classify_response("abc.com", payload)
         self.assertEqual(result.status, STATUS_AVAILABLE_MISMATCH)
-        self.assertEqual(result.returned_name, "musa-new.com")
+        self.assertEqual(result.returned_name, "abc-new.com")
 
     def test_no_com_result(self):
         payload = {
             "check_result": {"name": "", "available": False, "can_register": False},
-            "domains": [{"name": "musa.net", "availability": "available"}],
+            "domains": [{"name": "abc.net", "availability": "available"}],
         }
-        self.assertEqual(classify_response("musa.com", payload).status, STATUS_NO_COM)
+        self.assertEqual(classify_response("abc.com", payload).status, STATUS_NO_COM)
 
 
 if __name__ == "__main__":

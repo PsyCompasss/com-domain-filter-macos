@@ -9,7 +9,8 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from urllib.parse import urlparse
 
-from .patterns import PATTERNS, PatternConfigurationError, PatternGenerator, normalize_custom
+from .patterns import ALLOWED_CHARACTERS, PATTERNS, PatternConfigurationError, PatternGenerator, normalize_custom
+from .sites import DEFAULT_SITES, checker_for_url
 from .storage import HistoryStore, SettingsStore, default_app_data_dir
 from .worker import RunConfig, SearchWorker
 
@@ -27,8 +28,8 @@ class DomainFilterApp:
         self.root = root
         self.root.report_callback_exception = self._report_callback_exception
         self.root.title("COM域名筛选器")
-        self.root.geometry("1120x820")
-        self.root.minsize(980, 720)
+        self.root.geometry("980x720")
+        self.root.minsize(860, 520)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind("<Command-Return>", lambda _event: self._start())
         self.root.bind("<Control-Return>", lambda _event: self._start())
@@ -39,6 +40,7 @@ class DomainFilterApp:
         self.settings_store = SettingsStore(self.app_data / "settings.json")
         self.events: queue.Queue[tuple[str, dict]] = queue.Queue()
         self.worker: SearchWorker | None = None
+        self.sites = [dict(item) for item in DEFAULT_SITES]
 
         self.char_vars: dict[str, tk.BooleanVar] = {}
         self.pattern_vars: dict[str, tk.BooleanVar] = {}
@@ -64,11 +66,11 @@ class DomainFilterApp:
         outer.pack(fill="both", expand=True)
 
         header = ttk.Frame(outer)
-        header.pack(fill="x", pady=(0, 10))
+        header.pack(fill="x", padx=42, pady=(0, 10))
         ttk.Label(header, text="COM域名筛选器", style="Title.TLabel").pack(side="left")
         ttk.Label(
             header,
-            text="随机生成 · Cloudflare验证 · 自动写入Excel",
+            text="随机生成 · 多网站验证 · 自动写入Excel",
             style="Subtitle.TLabel",
         ).pack(side="left", padx=18, pady=(8, 0))
         self.status_var = tk.StringVar(value="准备就绪")
@@ -77,36 +79,70 @@ class DomainFilterApp:
         self._build_bottom_bar(outer)
 
         notebook = ttk.Notebook(outer)
+        self.notebook = notebook
+        self.tab_canvases = []
         notebook.pack(fill="both", expand=True)
-        self.rules_tab = ttk.Frame(notebook, padding=14)
-        self.run_tab = ttk.Frame(notebook, padding=14)
-        self.results_tab = ttk.Frame(notebook, padding=14)
-        notebook.add(self.rules_tab, text="  生成规则  ")
-        notebook.add(self.run_tab, text="  运行设置  ")
-        notebook.add(self.results_tab, text="  可注册结果  ")
+        rules_page, self.rules_tab = self._create_scrollable_tab(notebook)
+        run_page, self.run_tab = self._create_scrollable_tab(notebook)
+        results_page, self.results_tab = self._create_scrollable_tab(notebook)
+        notebook.add(rules_page, text="  生成规则  ")
+        notebook.add(run_page, text="  运行设置  ")
+        notebook.add(results_page, text="  可注册结果  ")
 
         self._build_rules_tab()
         self._build_run_tab()
         self._build_results_tab()
+
+    def _create_scrollable_tab(self, notebook):
+        page = ttk.Frame(notebook)
+        canvas = tk.Canvas(page, highlightthickness=0, borderwidth=0)
+        self.tab_canvases.append(canvas)
+        scrollbar = ttk.Scrollbar(page, orient="vertical", command=canvas.yview)
+        content = ttk.Frame(canvas, padding=14)
+        window = canvas.create_window((0, 0), window=content, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def update_scroll_region(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def fit_width(event):
+            canvas.itemconfigure(window, width=event.width)
+
+        def wheel(event):
+            delta = -1 if event.delta > 0 else 1
+            canvas.yview_scroll(delta, "units")
+
+        content.bind("<Configure>", update_scroll_region)
+        canvas.bind("<Configure>", fit_width)
+        page.bind("<Enter>", lambda _event: canvas.bind_all("<MouseWheel>", wheel))
+        page.bind("<Leave>", lambda _event: canvas.unbind_all("<MouseWheel>"))
+        return page, content
 
     def _build_rules_tab(self) -> None:
         char_frame = ttk.LabelFrame(self.rules_tab, text="字符池（可多选）", padding=10)
         char_frame.pack(fill="x", pady=(0, 12))
         actions = ttk.Frame(char_frame)
         actions.pack(fill="x", pady=(0, 6))
-        ttk.Button(actions, text="全选", command=lambda: self._set_chars(string.ascii_lowercase + string.digits, True)).pack(side="left")
+        ttk.Button(actions, text="全选", command=lambda: self._set_chars(ALLOWED_CHARACTERS, True)).pack(side="left")
         ttk.Button(actions, text="只选字母", command=self._letters_only).pack(side="left", padx=6)
         ttk.Button(actions, text="只选数字", command=self._digits_only).pack(side="left")
         ttk.Button(actions, text="清空", command=lambda: self._set_chars("", False)).pack(side="left", padx=6)
 
         char_grid = ttk.Frame(char_frame)
         char_grid.pack(fill="x")
-        for index, char in enumerate(string.ascii_lowercase + string.digits):
+        for index, char in enumerate(ALLOWED_CHARACTERS):
             variable = tk.BooleanVar(value=True)
             self.char_vars[char] = variable
             ttk.Checkbutton(char_grid, text=char, variable=variable, width=3).grid(
                 row=index // 12, column=index % 12, sticky="w", padx=5, pady=3
             )
+        ttk.Label(
+            char_frame,
+            text=".com 名称可使用英文字母、数字和半角连字符 -；连字符不能位于开头或结尾。下划线 _ 不合法。",
+            foreground="#5F6368",
+        ).pack(anchor="w", pady=(6, 0))
 
         custom_frame = ttk.LabelFrame(self.rules_tab, text="固定内容与随机长度", padding=10)
         custom_frame.pack(fill="x", pady=(0, 12))
@@ -124,12 +160,12 @@ class DomainFilterApp:
         )
         ttk.Label(
             custom_frame,
-            text="示例：开头 musa ＋ 规律 AAA ＋ 结尾 88 → musaxxx88.com",
+            text="示例：开头 abc ＋ 规律 AAA ＋ 结尾 88 → abcxxx88.com",
             foreground="#5F6368",
         ).grid(row=1, column=2, columnspan=3, sticky="w", pady=(10, 0))
 
         pattern_frame = ttk.LabelFrame(self.rules_tab, text="规律选号（可多选）", padding=10)
-        pattern_frame.pack(fill="both", expand=True)
+        pattern_frame.pack(fill="x")
         pattern_actions = ttk.Frame(pattern_frame)
         pattern_actions.pack(fill="x", pady=(0, 6))
         ttk.Button(pattern_actions, text="全选规律", command=lambda: self._set_patterns(True)).pack(side="left")
@@ -140,33 +176,45 @@ class DomainFilterApp:
             variable = tk.BooleanVar(value=pattern == "AAA")
             self.pattern_vars[pattern] = variable
             ttk.Checkbutton(pattern_grid, text=pattern, variable=variable, width=13).grid(
-                row=index // 5, column=index % 5, sticky="w", padx=10, pady=5
+                row=index // 4, column=index % 4, sticky="w", padx=10, pady=5
             )
 
     def _build_run_tab(self) -> None:
         site_frame = ttk.LabelFrame(self.run_tab, text="查询网站", padding=12)
         site_frame.pack(fill="x", pady=(0, 12))
-        ttk.Label(site_frame, text="网站类型").grid(row=0, column=0, sticky="w")
+        ttk.Label(site_frame, text="网站名称").grid(row=0, column=0, sticky="w")
         self.site_name_var = tk.StringVar(value="Cloudflare")
-        ttk.Combobox(site_frame, textvariable=self.site_name_var, values=("Cloudflare",), state="readonly", width=18).grid(
-            row=0, column=1, sticky="w", padx=8
+        self.site_combo = ttk.Combobox(
+            site_frame,
+            textvariable=self.site_name_var,
+            values=tuple(item["name"] for item in self.sites),
+            state="normal",
+            width=24,
+        )
+        self.site_combo.grid(row=0, column=1, sticky="ew", padx=8)
+        self.site_combo.bind("<<ComboboxSelected>>", self._on_site_selected)
+        ttk.Button(site_frame, text="添加/保存", command=self._upsert_site).grid(
+            row=0, column=2, padx=(0, 8)
+        )
+        ttk.Button(site_frame, text="删除", command=self._delete_site).grid(
+            row=0, column=3
         )
         ttk.Label(site_frame, text="网址").grid(row=1, column=0, sticky="w", pady=(10, 0))
         self.site_url_var = tk.StringVar(value="https://domains.cloudflare.com/")
-        ttk.Entry(site_frame, textvariable=self.site_url_var, width=70).grid(
-            row=1, column=1, columnspan=4, sticky="ew", padx=8, pady=(10, 0)
+        ttk.Entry(site_frame, textvariable=self.site_url_var).grid(
+            row=1, column=1, columnspan=3, sticky="ew", padx=8, pady=(10, 0)
         )
-        site_frame.columnconfigure(4, weight=1)
+        site_frame.columnconfigure(1, weight=1)
         ttk.Label(
             site_frame,
-            text="第一版只适配 Cloudflare；地址可以修改，但主机必须是 domains.cloudflare.com。",
+            text="名称可以直接输入；填写网址后点“添加/保存”。当前已适配 Cloudflare 和阿里云万网。",
             foreground="#5F6368",
-        ).grid(row=2, column=1, columnspan=4, sticky="w", padx=8, pady=(8, 0))
+        ).grid(row=2, column=1, columnspan=3, sticky="w", padx=8, pady=(8, 0))
         ttk.Label(
             site_frame,
             text="浏览器：系统 Google Chrome（使用独立资料目录和独立窗口，不操作你现有的标签页）",
             foreground="#22577A",
-        ).grid(row=3, column=1, columnspan=4, sticky="w", padx=8, pady=(6, 0))
+        ).grid(row=3, column=1, columnspan=3, sticky="w", padx=8, pady=(6, 0))
 
         speed_frame = ttk.LabelFrame(self.run_tab, text="查询速度", padding=12)
         speed_frame.pack(fill="x", pady=(0, 12))
@@ -209,7 +257,7 @@ class DomainFilterApp:
         ).pack(side="bottom", anchor="w", pady=(10, 0))
 
         progress_frame = ttk.LabelFrame(self.run_tab, text="当前进度", padding=12)
-        progress_frame.pack(fill="both", expand=True)
+        progress_frame.pack(fill="x")
         self.current_domain_var = tk.StringVar(value="尚未开始")
         self.checked_var = tk.StringVar(value="0")
         self.found_var = tk.StringVar(value="0")
@@ -232,21 +280,23 @@ class DomainFilterApp:
         ttk.Button(toolbar, text="打开所在文件夹", command=self._open_excel_folder).pack(side="right", padx=8)
 
         columns = ("domain", "pattern", "time")
-        self.result_tree = ttk.Treeview(self.results_tab, columns=columns, show="headings")
+        tree_frame = ttk.Frame(self.results_tab)
+        tree_frame.pack(fill="both", expand=True)
+        self.result_tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=24)
         self.result_tree.heading("domain", text="域名")
         self.result_tree.heading("pattern", text="规律")
         self.result_tree.heading("time", text="查询时间")
         self.result_tree.column("domain", width=460)
         self.result_tree.column("pattern", width=150, anchor="center")
         self.result_tree.column("time", width=220, anchor="center")
-        scroll = ttk.Scrollbar(self.results_tab, orient="vertical", command=self.result_tree.yview)
+        scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.result_tree.yview)
         self.result_tree.configure(yscrollcommand=scroll.set)
         self.result_tree.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
 
     def _build_bottom_bar(self, parent) -> None:
         bar = ttk.Frame(parent)
-        bar.pack(fill="x", pady=(0, 10))
+        bar.pack(fill="x", padx=42, pady=(0, 10))
         self.start_button = ttk.Button(bar, text="开始查询", command=self._start, style="Accent.TButton")
         self.start_button.pack(side="left")
         self.pause_button = ttk.Button(bar, text="暂停", command=self._pause, state="disabled")
@@ -255,7 +305,11 @@ class DomainFilterApp:
         self.resume_button.pack(side="left")
         self.stop_button = ttk.Button(bar, text="停止", command=self._stop, state="disabled")
         self.stop_button.pack(side="left", padx=8)
-        ttk.Label(bar, text="系统 Chrome 专用窗口平时最小化；需要验证时会弹窗提醒。", foreground="#5F6368").pack(side="right")
+        ttk.Label(
+            bar,
+            text="Chrome 不会自动缩小；可手动最小化，查询仍会继续。",
+            foreground="#5F6368",
+        ).pack(side="right")
 
     def _set_chars(self, selected: str, value: bool) -> None:
         selected_set = set(selected)
@@ -271,6 +325,50 @@ class DomainFilterApp:
     def _set_patterns(self, value: bool) -> None:
         for variable in self.pattern_vars.values():
             variable.set(value)
+
+    def _refresh_site_combo(self) -> None:
+        self.site_combo.configure(values=tuple(item["name"] for item in self.sites))
+
+    def _on_site_selected(self, _event=None) -> None:
+        name = self.site_name_var.get().strip()
+        selected = next((item for item in self.sites if item["name"] == name), None)
+        if selected:
+            self.site_url_var.set(selected["url"])
+
+    def _upsert_site(self) -> None:
+        name = self.site_name_var.get().strip()
+        url = self.site_url_var.get().strip()
+        parsed = urlparse(url)
+        if not name:
+            messagebox.showerror("网站名称有误", "请输入网站名称。")
+            return
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            messagebox.showerror("网址有误", "请输入完整网址，例如 https://wanwang.aliyun.com/domain")
+            return
+        existing = next((item for item in self.sites if item["name"] == name), None)
+        if existing:
+            existing["url"] = url
+        else:
+            self.sites.append({"name": name, "url": url})
+        self._refresh_site_combo()
+        self._save_settings()
+        self.status_var.set(f"已保存网站：{name}")
+
+    def _delete_site(self) -> None:
+        name = self.site_name_var.get().strip()
+        if len(self.sites) <= 1:
+            messagebox.showinfo("不能删除", "至少保留一个查询网站。")
+            return
+        remaining = [item for item in self.sites if item["name"] != name]
+        if len(remaining) == len(self.sites):
+            messagebox.showinfo("未找到", "列表中没有这个网站。")
+            return
+        self.sites = remaining
+        self._refresh_site_combo()
+        self.site_name_var.set(self.sites[0]["name"])
+        self.site_url_var.set(self.sites[0]["url"])
+        self._save_settings()
+        self.status_var.set(f"已删除网站：{name}")
 
     def _choose_excel(self) -> None:
         path = filedialog.asksaveasfilename(
@@ -324,8 +422,9 @@ class DomainFilterApp:
         limit_found = self._positive_int(self.limit_found_var.get(), "目标数量")
         site_url = self.site_url_var.get().strip()
         parsed = urlparse(site_url)
-        if parsed.scheme not in ("http", "https") or parsed.hostname != "domains.cloudflare.com":
-            raise ValueError("第一版只支持 domains.cloudflare.com，请检查查询网址。")
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError("请输入完整的查询网址。")
+        checker_for_url(site_url)
         excel_path = Path(self.excel_path_var.get()).expanduser()
         if excel_path.suffix.lower() != ".xlsx":
             raise ValueError("Excel结果文件必须使用 .xlsx 后缀。")
@@ -344,7 +443,7 @@ class DomainFilterApp:
             limit_found=limit_found,
             run_until_stopped=self.run_until_stopped_var.get(),
             excel_path=excel_path,
-            profile_dir=self.app_data / "google-chrome-profile",
+            profile_dir=self.app_data / "google-chrome-profile" / parsed.hostname,
         )
 
     def _start(self) -> None:
@@ -417,7 +516,7 @@ class DomainFilterApp:
             self.status_var.set("等待你完成验证")
             self.root.bell()
             messagebox.showwarning(
-                "需要Cloudflare验证",
+                "需要网站安全验证",
                 f"{payload['message']}\n\n查询已经暂停。请在自动打开的系统 Google Chrome 窗口中完成验证；如果验证再次循环，请停止任务，稍后重试或更换网络。软件不会自动绕过验证。",
             )
         elif event_type == "finished":
@@ -456,7 +555,9 @@ class DomainFilterApp:
             "prefix": self.prefix_var.get(),
             "suffix": self.suffix_var.get(),
             "unlimited_length": self.unlimited_length_var.get(),
+            "site_name": self.site_name_var.get(),
             "site_url": self.site_url_var.get(),
+            "sites": self.sites,
             "interval": self.interval_var.get(),
             "limit_tests_enabled": self.limit_tests_enabled_var.get(),
             "limit_tests": self.limit_tests_var.get(),
@@ -473,6 +574,16 @@ class DomainFilterApp:
         settings = self.settings_store.load()
         if not settings:
             return
+        saved_sites = settings.get("sites")
+        if isinstance(saved_sites, list):
+            valid_sites = [
+                {"name": str(item.get("name", "")).strip(), "url": str(item.get("url", "")).strip()}
+                for item in saved_sites
+                if isinstance(item, dict) and str(item.get("name", "")).strip() and str(item.get("url", "")).strip()
+            ]
+            if valid_sites:
+                self.sites = valid_sites
+                self._refresh_site_combo()
         selected_chars = set(settings.get("characters", []))
         for char, variable in self.char_vars.items():
             variable.set(char in selected_chars)
@@ -483,6 +594,7 @@ class DomainFilterApp:
             (self.prefix_var, "prefix"),
             (self.suffix_var, "suffix"),
             (self.unlimited_length_var, "unlimited_length"),
+            (self.site_name_var, "site_name"),
             (self.site_url_var, "site_url"),
             (self.interval_var, "interval"),
             (self.limit_tests_var, "limit_tests"),

@@ -10,7 +10,6 @@ from typing import Callable
 
 from .cloudflare import (
     STATUS_EXACT_AVAILABLE,
-    CloudflareChecker,
     CloudflareError,
     PageStructureChanged,
     VerificationRequired,
@@ -18,6 +17,7 @@ from .cloudflare import (
 from .excel_store import ExcelStore, ExcelStoreError
 from .patterns import PatternGenerator
 from .storage import HistoryStore
+from .sites import create_checker
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,7 @@ class SearchWorker:
         config: RunConfig,
         history: HistoryStore,
         emit: Callable[[str, dict], None],
-        checker_factory=CloudflareChecker,
+        checker_factory=create_checker,
     ) -> None:
         self.config = config
         self.history = history
@@ -111,7 +111,7 @@ class SearchWorker:
             consecutive_verifications = 0
             if checker.verification_present():
                 consecutive_verifications += 1
-                self.emit("verification", {"message": "Cloudflare在首次打开时要求进行安全验证。"})
+                self.emit("verification", {"message": "查询网站在首次打开时要求进行安全验证。"})
                 if not checker.wait_for_verification(self.stop_event):
                     if self.stop_event.is_set():
                         return
@@ -143,7 +143,7 @@ class SearchWorker:
                         consecutive_verifications += 1
                         if consecutive_verifications >= 2:
                             raise CloudflareError(
-                                "Cloudflare连续要求真人验证，任务已停止。请稍后重试；如果仍然循环，请检查代理、VPN或更换网络。"
+                                "查询网站连续要求真人验证，任务已停止。请稍后重试；如果仍然循环，请检查代理、VPN或更换网络。"
                             ) from exc
                         self.emit("verification", {"message": str(exc)})
                         if not checker.wait_for_verification(self.stop_event):

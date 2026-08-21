@@ -1,1 +1,1 @@
-2407c68dccc0bc06deea6e3ca904857a905f9487130e4d7b536f4cab184b826d  COM-Domain-Filter-macOS-v1.1.0.zip
+951d8b0cf5a6685b23fc95e0feb3dd361eeebf639561ff15a45957f586011e8b  COM-Domain-Filter-macOS-v1.2.0.zip

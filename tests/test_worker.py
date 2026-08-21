@@ -42,7 +42,7 @@ class WorkerTests(unittest.TestCase):
             site_url="https://domains.cloudflare.com/",
             characters=("a", "b", "c"),
             patterns=("AAA",),
-            prefix="musa",
+            prefix="abc",
             suffix="",
             unlimited_length=6,
             interval_seconds=0.01,

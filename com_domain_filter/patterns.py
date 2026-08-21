@@ -36,7 +36,9 @@ PATTERNS: tuple[str, ...] = (
     "AABAA",
 )
 
-CUSTOM_RE = re.compile(r"^[a-z0-9]*$")
+ALLOWED_CHARACTERS = "abcdefghijklmnopqrstuvwxyz0123456789-"
+CUSTOM_RE = re.compile(r"^[a-z0-9-]*$")
+DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 class PatternConfigurationError(ValueError):
@@ -46,7 +48,7 @@ class PatternConfigurationError(ValueError):
 def normalize_custom(value: str) -> str:
     normalized = value.strip().lower()
     if not CUSTOM_RE.fullmatch(normalized):
-        raise PatternConfigurationError("固定内容只能包含英文字母和数字，不能包含 .com、空格或符号。")
+        raise PatternConfigurationError("固定内容只能包含英文字母、数字和半角连字符 -，不能包含 .com、空格或其他符号。")
     return normalized
 
 
@@ -81,9 +83,17 @@ class PatternGenerator:
 
     def validate(self) -> None:
         if not self.characters:
-            raise PatternConfigurationError("请至少选择一个字母或数字。")
+            raise PatternConfigurationError("请至少选择一个字母、数字或连字符。")
         if any(not CUSTOM_RE.fullmatch(c) or len(c) != 1 for c in self.characters):
             raise PatternConfigurationError("字符池中包含无效字符。")
+        if self.prefix.startswith("-"):
+            raise PatternConfigurationError("固定开头不能以连字符 - 开始。")
+        if self.suffix.endswith("-"):
+            raise PatternConfigurationError("固定结尾不能以连字符 - 结束。")
+        if not self.prefix and set(self.characters) == {"-"}:
+            raise PatternConfigurationError("域名不能以连字符 - 开始，请再选择字母或数字。")
+        if not self.suffix and set(self.characters) == {"-"}:
+            raise PatternConfigurationError("域名不能以连字符 - 结束，请再选择字母或数字。")
         if not self.patterns:
             raise PatternConfigurationError("请至少选择一个规律。")
         unknown = [p for p in self.patterns if p not in PATTERNS]
@@ -108,15 +118,18 @@ class PatternGenerator:
         chosen = pattern or self.rng.choice(self.patterns)
         if chosen not in self.patterns:
             raise PatternConfigurationError(f"未选择规律：{chosen}")
-        if chosen == "不限":
-            random_part = "".join(self.rng.choice(self.characters) for _ in range(self.unlimited_length))
-        else:
-            placeholders = unique_placeholders(chosen)
-            values = self.rng.sample(self.characters, len(placeholders))
-            mapping = dict(zip(placeholders, values))
-            random_part = "".join(mapping[item] for item in chosen)
-        label = f"{self.prefix}{random_part}{self.suffix}"
-        return GeneratedDomain(domain=f"{label}.com", pattern=chosen, random_part=random_part)
+        for _ in range(1000):
+            if chosen == "不限":
+                random_part = "".join(self.rng.choice(self.characters) for _ in range(self.unlimited_length))
+            else:
+                placeholders = unique_placeholders(chosen)
+                values = self.rng.sample(self.characters, len(placeholders))
+                mapping = dict(zip(placeholders, values))
+                random_part = "".join(mapping[item] for item in chosen)
+            label = f"{self.prefix}{random_part}{self.suffix}"
+            if DOMAIN_LABEL_RE.fullmatch(label):
+                return GeneratedDomain(domain=f"{label}.com", pattern=chosen, random_part=random_part)
+        raise PatternConfigurationError("当前字符和规律无法生成首尾合法的域名，请增加字母或数字。")
 
     def estimated_space(self) -> int:
         size = 0

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 from typing import Any
+from urllib.parse import urlparse
 
 
 STATUS_EXACT_AVAILABLE = "exact_available"
@@ -114,6 +115,8 @@ def _available_local_port() -> int:
 
 
 class CloudflareChecker:
+    site_name = "Cloudflare"
+
     def __init__(self, site_url: str, profile_dir: Path) -> None:
         self.site_url = site_url.rstrip("/") + "/"
         self.profile_dir = Path(profile_dir)
@@ -168,8 +171,9 @@ class CloudflareChecker:
             self._playwright = sync_playwright().start()
             self.browser = self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
             self.context = self.browser.contexts[0]
+            site_host = urlparse(self.site_url).hostname or ""
             self.page = next(
-                (page for page in self.context.pages if "domains.cloudflare.com" in page.url),
+                (page for page in self.context.pages if site_host in page.url),
                 self.context.pages[0] if self.context.pages else self.context.new_page(),
             )
             self._cdp_session = self.context.new_cdp_session(self.page)
@@ -194,9 +198,7 @@ class CloudflareChecker:
                 self.page.url,
             )
         except Exception as exc:
-            raise CloudflareError(f"无法打开Cloudflare域名页面：{exc}") from exc
-        if not self.verification_present():
-            self.minimize_browser()
+            raise CloudflareError(f"无法打开{self.site_name}域名页面：{exc}") from exc
 
     def _wait_for_debug_endpoint(self, port: int) -> None:
         endpoint = f"http://127.0.0.1:{port}/json/version"
@@ -404,7 +406,6 @@ class CloudflareChecker:
             if response.status != 200:
                 raise CloudflareError(f"Cloudflare查询返回HTTP {response.status}。")
             payload = response.json()
-            self.minimize_browser()
         except self._timeout_error as exc:
             raise VerificationRequired("等待查询结果超时，可能需要完成Cloudflare验证。") from exc
         except VerificationRequired:
@@ -437,7 +438,6 @@ class CloudflareChecker:
                 box = self._search_box()
                 button = self._search_button()
                 if box.is_visible() and button.is_visible() and button.is_enabled():
-                    self.minimize_browser()
                     return True
             except Exception:
                 pass
