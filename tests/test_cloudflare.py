@@ -1,6 +1,7 @@
 import unittest
 import os
 import tempfile
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -17,6 +18,19 @@ from com_domain_filter.cloudflare import (
 
 
 class CloudflareClassificationTests(unittest.TestCase):
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = json.dumps(payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return self.payload
+
     def test_system_chrome_override_is_detected(self):
         with tempfile.TemporaryDirectory() as temp:
             executable = Path(temp) / "Google Chrome"
@@ -74,6 +88,34 @@ class CloudflareClassificationTests(unittest.TestCase):
                 ),
             ):
                 self.assertEqual(checker._find_existing_chrome(), (4321, 45678))
+
+    def test_wait_for_existing_chrome_retries_transient_port_gap(self):
+        with tempfile.TemporaryDirectory() as temp:
+            checker = CloudflareChecker("https://example.com/", Path(temp) / "profile")
+            with (
+                patch.object(checker, "_find_existing_chrome", side_effect=[None, (4321, 45678)]),
+                patch("com_domain_filter.cloudflare.time.sleep"),
+            ):
+                self.assertEqual(checker._wait_for_existing_chrome(2), (4321, 45678))
+
+    def test_empty_retained_chrome_gets_new_page_before_reconnect(self):
+        with tempfile.TemporaryDirectory() as temp:
+            checker = CloudflareChecker("https://example.com/", Path(temp) / "profile")
+            responses = [self.FakeResponse([]), self.FakeResponse({"type": "page"})]
+            with patch("com_domain_filter.cloudflare.urlopen", side_effect=responses) as mocked:
+                checker._ensure_page_target(45678)
+            self.assertEqual(mocked.call_count, 2)
+            request = mocked.call_args_list[1].args[0]
+            self.assertEqual(request.method, "PUT")
+            self.assertIn("https%3A%2F%2Fexample.com%2F", request.full_url)
+
+    def test_retained_chrome_with_page_is_left_unchanged(self):
+        with tempfile.TemporaryDirectory() as temp:
+            checker = CloudflareChecker("https://example.com/", Path(temp) / "profile")
+            response = self.FakeResponse([{"type": "page"}])
+            with patch("com_domain_filter.cloudflare.urlopen", return_value=response) as mocked:
+                checker._ensure_page_target(45678)
+            self.assertEqual(mocked.call_count, 1)
 
     def test_exact_available(self):
         payload = {

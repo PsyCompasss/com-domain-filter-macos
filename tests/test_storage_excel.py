@@ -18,6 +18,21 @@ class StorageAndExcelTests(unittest.TestCase):
             self.assertTrue(store.has_tested("ABC.COM"))
             self.assertEqual(store.total_count(), 1)
 
+    def test_query_is_reserved_before_result_and_then_finalized(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = HistoryStore(Path(temp) / "state.db")
+            self.assertTrue(store.reserve("abc.com", "start", "AAA", "", ""))
+            self.assertTrue(store.has_tested("abc.com"))
+            self.assertFalse(store.reserve("abc.com", "start", "AAA", "", ""))
+            self.assertTrue(
+                store.finalize("abc.com", "exact_unavailable", "finish", "AAA", "", "", "done")
+            )
+            with store._connect() as connection:
+                row = connection.execute(
+                    "SELECT status, checked_at, detail FROM tested_domains WHERE domain = 'abc.com'"
+                ).fetchone()
+            self.assertEqual(row, ("exact_unavailable", "finish", "done"))
+
     def test_settings_round_trip(self):
         with tempfile.TemporaryDirectory() as temp:
             store = SettingsStore(Path(temp) / "settings.json")

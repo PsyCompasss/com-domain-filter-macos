@@ -166,6 +166,19 @@ class SearchWorker:
                     )
                     return
 
+                # 必须在网页查询前写入去重数据库。否则用户在查询返回前后点击停止，
+                # 或软件意外退出时，这个已经发给网站的域名会在下次运行时再次出现。
+                started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+                if not self.history.reserve(
+                    item.domain,
+                    started_at,
+                    item.pattern,
+                    generator.prefix,
+                    generator.suffix,
+                ):
+                    continue
+
+                result = None
                 while not self.stop_event.is_set():
                     try:
                         self.emit("current", {"domain": item.domain, "pattern": item.pattern})
@@ -204,7 +217,7 @@ class SearchWorker:
 
                 consecutive_verifications = 0
 
-                if self.stop_event.is_set():
+                if result is None:
                     break
                 checked_at = datetime.now().astimezone().isoformat(timespec="seconds")
                 if result.status == STATUS_EXACT_AVAILABLE:
@@ -221,7 +234,7 @@ class SearchWorker:
                         "found",
                         {"domain": item.domain, "pattern": item.pattern, "checked_at": checked_at, "found": self.found},
                     )
-                self.history.record(
+                self.history.finalize(
                     item.domain,
                     result.status,
                     checked_at,
@@ -235,6 +248,8 @@ class SearchWorker:
                     "progress",
                     {"checked": self.checked, "found": self.found, "last_status": result.status},
                 )
+                if self.stop_event.is_set():
+                    break
                 reason = self._stop_reason()
                 if reason:
                     self.emit("finished", {"message": reason, "checked": self.checked, "found": self.found})

@@ -133,9 +133,10 @@ class WorkerTests(unittest.TestCase):
             events = []
             BlockingChecker.started.clear()
             BlockingChecker.release.clear()
+            history = HistoryStore(root / "state.db")
             worker = SearchWorker(
                 self.make_config(root, limit_tests=10),
-                HistoryStore(root / "state.db"),
+                history,
                 lambda kind, payload: events.append((kind, payload)),
                 checker_factory=BlockingChecker,
             )
@@ -147,8 +148,31 @@ class WorkerTests(unittest.TestCase):
 
             self.assertFalse(worker.is_alive)
             self.assertTrue(BlockingChecker.instances[-1].keep_browser)
+            self.assertEqual(worker.checked, 1)
+            self.assertEqual(history.total_count(), 1)
             messages = [payload["message"] for kind, payload in events if kind == "finished"]
             self.assertIn("已手动停止；Chrome浏览器保持打开", messages)
+
+    def test_domain_is_reserved_while_query_is_still_running(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            events = []
+            BlockingChecker.started.clear()
+            BlockingChecker.release.clear()
+            history = HistoryStore(root / "state.db")
+            worker = SearchWorker(
+                self.make_config(root, limit_tests=10),
+                history,
+                lambda kind, payload: events.append((kind, payload)),
+                checker_factory=BlockingChecker,
+            )
+            worker.start()
+            self.assertTrue(BlockingChecker.started.wait(timeout=5))
+            current = next(payload["domain"] for kind, payload in events if kind == "current")
+            self.assertTrue(history.has_tested(current))
+            worker.stop(keep_browser_open=True)
+            BlockingChecker.release.set()
+            worker.thread.join(timeout=5)
 
     def test_worker_stops_after_repeated_verification(self):
         with tempfile.TemporaryDirectory() as temp:

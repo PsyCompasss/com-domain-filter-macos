@@ -75,6 +75,47 @@ class HistoryStore:
             )
         return cursor.rowcount == 1
 
+    def reserve(
+        self,
+        domain: str,
+        checked_at: str,
+        pattern: str,
+        prefix: str,
+        suffix: str,
+    ) -> bool:
+        """在把域名发送给网站前占位，防止停止或崩溃后再次查询。"""
+        return self.record(
+            domain,
+            "query_started",
+            checked_at,
+            pattern,
+            prefix,
+            suffix,
+            "已发送查询；等待最终结果",
+        )
+
+    def finalize(
+        self,
+        domain: str,
+        status: str,
+        checked_at: str,
+        pattern: str,
+        prefix: str,
+        suffix: str,
+        detail: str = "",
+    ) -> bool:
+        """把已占位的查询更新为最终结果。"""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE tested_domains
+                SET status = ?, checked_at = ?, pattern = ?, prefix = ?, suffix = ?, detail = ?
+                WHERE domain = ?
+                """,
+                (status, checked_at, pattern, prefix, suffix, detail, domain.lower()),
+            )
+        return cursor.rowcount == 1
+
     def found_rows(self) -> list[tuple[str, str, str, str, str]]:
         with self._connect() as connection:
             return connection.execute(

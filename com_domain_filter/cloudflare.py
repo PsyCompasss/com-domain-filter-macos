@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
+from urllib.request import Request, urlopen
 
 
 STATUS_EXACT_AVAILABLE = "exact_available"
@@ -150,6 +151,12 @@ class CloudflareChecker:
             raise CloudflareError("没有找到系统 Google Chrome，请先安装 Chrome 后再查询。")
         logging.getLogger(__name__).info("使用系统 Google Chrome：%s", chrome_path)
         existing = self._find_existing_chrome()
+        if not existing and self._matching_chrome_processes():
+            # 停止后 Playwright 与 Chrome 的调试端口可能有一个很短的重连窗口。
+            # 绝不能因为一次探测失败就杀掉仍在运行的专用 Chrome。
+            existing = self._wait_for_existing_chrome(timeout_seconds=20)
+            if not existing:
+                raise TransientPageError("专用 Chrome 仍在运行，正在等待自动重连。")
         if existing:
             self._chrome_pid, port = existing
             self._reused_existing = True
@@ -160,7 +167,6 @@ class CloudflareChecker:
                 port,
             )
         else:
-            self._stop_stale_chrome()
             port = _available_local_port()
             log_path = self.profile_dir.parent / "chrome-browser.log"
             self._chrome_log = log_path.open("a", encoding="utf-8")
@@ -186,7 +192,7 @@ class CloudflareChecker:
             except Exception as exc:
                 # Chrome 遇到相同资料目录时，可能把新请求转交给已经存在的窗口，
                 # 随后让刚启动的进程退出。此时应连接旧窗口，不能误报启动失败。
-                delegated = self._find_existing_chrome()
+                delegated = self._wait_for_existing_chrome(timeout_seconds=20)
                 if delegated:
                     self._chrome_process = None
                     self._chrome_pid, port = delegated
@@ -200,8 +206,9 @@ class CloudflareChecker:
                     )
                 else:
                     self._close_chrome_process()
-                    raise CloudflareError(f"无法启动系统 Google Chrome：{exc}") from exc
+                    raise TransientPageError(f"系统 Google Chrome 暂时未就绪：{exc}") from exc
         try:
+            self._ensure_page_target(port)
             self._playwright = sync_playwright().start()
             self.browser = self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
             self.context = self.browser.contexts[0]
@@ -217,11 +224,10 @@ class CloudflareChecker:
             if self._playwright:
                 self._playwright.stop()
             self._playwright = None
-            if self._reused_existing:
-                self._release_chrome_process()
-            else:
-                self._close_chrome_process()
-            raise CloudflareError(f"无法连接系统 Google Chrome：{exc}") from exc
+            # 调试连接本身可能只是短暂中断。保留 Chrome，让 worker 自动重连，
+            # 不再关闭窗口，也不弹出“无法启动 Chrome”的错误框。
+            self._release_chrome_process()
+            raise TransientPageError(f"系统 Google Chrome 暂时无法连接：{exc}") from exc
         try:
             if self.page.url.rstrip("/") != self.site_url.rstrip("/"):
                 self.page.goto(self.site_url, wait_until="domcontentloaded", timeout=60_000)
@@ -258,6 +264,26 @@ class CloudflareChecker:
                 return True
         except Exception:
             return False
+
+    def _ensure_page_target(self, port: int) -> None:
+        """Chrome 进程还在但所有窗口都已关掉时，先重新创建网页标签。"""
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/json/list", timeout=3) as response:
+                targets = json.loads(response.read().decode("utf-8"))
+            if any(item.get("type") == "page" for item in targets):
+                return
+            encoded_url = quote(self.site_url, safe="")
+            request = Request(
+                f"http://127.0.0.1:{port}/json/new?{encoded_url}",
+                method="PUT",
+            )
+            with urlopen(request, timeout=5) as response:
+                created = json.loads(response.read().decode("utf-8"))
+            if created.get("type") != "page":
+                raise ValueError("Chrome 没有返回新网页标签")
+            logging.getLogger(__name__).info("专用 Chrome 没有网页窗口，已自动重新打开查询页")
+        except Exception as exc:
+            raise TransientPageError(f"专用 Chrome 暂时无法重新打开查询页：{exc}") from exc
 
     def _matching_chrome_processes(self) -> list[tuple[int, str]]:
         try:
@@ -311,26 +337,20 @@ class CloudflareChecker:
                 return pid, port
         return None
 
+    def _wait_for_existing_chrome(self, timeout_seconds: float) -> tuple[int, int] | None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            existing = self._find_existing_chrome()
+            if existing:
+                return existing
+            time.sleep(0.2)
+        return None
+
     def _write_session_files(self, port: int) -> None:
         self._pid_file.parent.mkdir(parents=True, exist_ok=True)
         if self._chrome_pid is not None:
             self._pid_file.write_text(str(self._chrome_pid), encoding="utf-8")
         self._port_file.write_text(str(port), encoding="utf-8")
-
-    def _stop_stale_chrome(self) -> None:
-        for pid, _command in self._matching_chrome_processes():
-            try:
-                os.kill(pid, 15)
-                for _ in range(50):
-                    try:
-                        os.kill(pid, 0)
-                    except ProcessLookupError:
-                        break
-                    time.sleep(0.1)
-            except Exception:
-                pass
-        self._pid_file.unlink(missing_ok=True)
-        self._port_file.unlink(missing_ok=True)
 
     @staticmethod
     def _run_applescript(script: str) -> None:
