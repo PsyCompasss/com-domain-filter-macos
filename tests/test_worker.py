@@ -5,7 +5,12 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from com_domain_filter.cloudflare import QueryResult, STATUS_EXACT_AVAILABLE, VerificationRequired
+from com_domain_filter.cloudflare import (
+    QueryResult,
+    STATUS_EXACT_AVAILABLE,
+    TransientPageError,
+    VerificationRequired,
+)
 from com_domain_filter.excel_store import SHEET_NAME
 from com_domain_filter.storage import HistoryStore
 from com_domain_filter.worker import RunConfig, SearchWorker
@@ -31,6 +36,9 @@ class FakeChecker:
     def query(self, domain):
         return QueryResult(domain, STATUS_EXACT_AVAILABLE, domain, True, True)
 
+    def recover_page(self):
+        pass
+
 
 class VerificationLoopChecker(FakeChecker):
     def query(self, domain):
@@ -48,6 +56,34 @@ class BlockingChecker(FakeChecker):
         type(self).started.set()
         type(self).release.wait(timeout=5)
         return super().query(domain)
+
+
+class TransientThenSuccessChecker(FakeChecker):
+    query_calls = 0
+    recover_calls = 0
+
+    def query(self, domain):
+        type(self).query_calls += 1
+        if type(self).query_calls == 1:
+            raise TransientPageError("页面暂时空白")
+        return super().query(domain)
+
+    def recover_page(self):
+        type(self).recover_calls += 1
+
+
+class StartupTransientChecker(FakeChecker):
+    start_calls = 0
+
+    def start(self):
+        type(self).start_calls += 1
+        if type(self).start_calls == 1:
+            raise TransientPageError("网站暂时打不开")
+
+
+class FastWaitEvent(threading.Event):
+    def wait(self, timeout=None):
+        return super().wait(0)
 
 
 class WorkerTests(unittest.TestCase):
@@ -130,6 +166,52 @@ class WorkerTests(unittest.TestCase):
             errors = [payload["message"] for kind, payload in events if kind == "error"]
             self.assertEqual(len(errors), 1)
             self.assertIn("连续要求真人验证", errors[0])
+
+    def test_transient_query_failure_refreshes_without_error_popup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            events = []
+            TransientThenSuccessChecker.query_calls = 0
+            TransientThenSuccessChecker.recover_calls = 0
+            worker = SearchWorker(
+                self.make_config(root, limit_tests=1),
+                HistoryStore(root / "state.db"),
+                lambda kind, payload: events.append((kind, payload)),
+                checker_factory=TransientThenSuccessChecker,
+            )
+            worker.stop_event = FastWaitEvent()
+            worker.start()
+            worker.thread.join(timeout=5)
+
+            self.assertFalse(worker.is_alive)
+            self.assertEqual(TransientThenSuccessChecker.query_calls, 2)
+            self.assertEqual(TransientThenSuccessChecker.recover_calls, 1)
+            self.assertFalse(any(kind in {"error", "verification"} for kind, _ in events))
+            self.assertTrue(
+                any(kind == "status" and "自动刷新继续" in payload["message"] for kind, payload in events)
+            )
+
+    def test_transient_startup_failure_retries_without_error_popup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            events = []
+            StartupTransientChecker.start_calls = 0
+            worker = SearchWorker(
+                self.make_config(root, limit_tests=1),
+                HistoryStore(root / "state.db"),
+                lambda kind, payload: events.append((kind, payload)),
+                checker_factory=StartupTransientChecker,
+            )
+            worker.stop_event = FastWaitEvent()
+            worker.start()
+            worker.thread.join(timeout=5)
+
+            self.assertFalse(worker.is_alive)
+            self.assertEqual(StartupTransientChecker.start_calls, 2)
+            self.assertFalse(any(kind in {"error", "verification"} for kind, _ in events))
+            self.assertTrue(
+                any(kind == "status" and "自动刷新重试" in payload["message"] for kind, payload in events)
+            )
 
 
 if __name__ == "__main__":

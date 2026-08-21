@@ -5,8 +5,14 @@ from com_domain_filter.cloudflare import (
     STATUS_EXACT_AVAILABLE,
     STATUS_EXACT_UNAVAILABLE,
     STATUS_NO_COM,
+    TransientPageError,
 )
-from com_domain_filter.wanwang import classify_wanwang_cards
+from com_domain_filter.wanwang import WanwangChecker, classify_wanwang_cards
+
+
+class BrokenPage:
+    def goto(self, *args, **kwargs):
+        raise OSError("temporary network failure")
 
 
 class WanwangClassificationTests(unittest.TestCase):
@@ -27,6 +33,13 @@ class WanwangClassificationTests(unittest.TestCase):
     def test_no_com(self):
         cards = [{"name": "abc", "suffix": ".cn", "text": "立即注册", "registerHref": "/commonbuy"}]
         self.assertEqual(classify_wanwang_cards("abc.com", cards).status, STATUS_NO_COM)
+
+    def test_network_failure_is_marked_for_automatic_refresh(self):
+        checker = WanwangChecker("https://wanwang.aliyun.com/domain", "/tmp/test-profile")
+        checker.page = BrokenPage()
+        checker._timeout_error = TimeoutError
+        with self.assertRaises(TransientPageError):
+            checker.query("abc.com")
 
 
 if __name__ == "__main__":

@@ -59,6 +59,22 @@ class CloudflareClassificationTests(unittest.TestCase):
             ):
                 self.assertIsNone(checker._find_existing_chrome())
 
+    def test_recorded_session_outside_chrome_profile_is_reused_first(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profile = Path(temp) / "profiles" / "wanwang.aliyun.com"
+            checker = CloudflareChecker("https://wanwang.aliyun.com/domain", profile)
+            checker._chrome_pid = 4321
+            checker._write_session_files(45678)
+            self.assertNotEqual(checker._pid_file.parent, profile)
+            with (
+                patch.object(checker, "_debug_endpoint_available", return_value=True),
+                patch(
+                    "com_domain_filter.cloudflare.subprocess.run",
+                    return_value=SimpleNamespace(stdout=f"Google Chrome --user-data-dir={profile}"),
+                ),
+            ):
+                self.assertEqual(checker._find_existing_chrome(), (4321, 45678))
+
     def test_exact_available(self):
         payload = {
             "check_result": {"name": "abc123.com", "available": True, "can_register": True},

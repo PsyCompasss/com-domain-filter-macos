@@ -14,6 +14,7 @@ from .cloudflare import (
     CloudflareError,
     PageStructureChanged,
     QueryResult,
+    TransientPageError,
     VerificationRequired,
 )
 
@@ -117,13 +118,15 @@ class WanwangChecker(CloudflareChecker):
                     break
                 self.page.wait_for_timeout(500)
             else:
-                raise VerificationRequired("等待万网查询结果超时，可能需要完成安全验证。")
+                raise TransientPageError("万网查询结果暂时没有加载出来。")
         except self._timeout_error as exc:
-            raise VerificationRequired("等待万网查询结果超时，可能需要完成安全验证。") from exc
-        except (VerificationRequired, PageStructureChanged):
+            if self.verification_present():
+                raise VerificationRequired("阿里云万网要求进行安全验证。") from exc
+            raise TransientPageError("万网页面加载超时。") from exc
+        except (VerificationRequired, TransientPageError, PageStructureChanged):
             raise
         except Exception as exc:
-            raise CloudflareError(f"万网查询失败：{exc}") from exc
+            raise TransientPageError(f"万网查询页面暂时加载失败：{exc}") from exc
 
         return classify_wanwang_cards(normalized_domain, cards)
 

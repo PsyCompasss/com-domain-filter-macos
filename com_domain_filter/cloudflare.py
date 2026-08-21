@@ -7,7 +7,6 @@ import re
 import socket
 import subprocess
 import time
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -27,6 +26,10 @@ class CloudflareError(RuntimeError):
 
 class VerificationRequired(CloudflareError):
     pass
+
+
+class TransientPageError(CloudflareError):
+    """普通网络或页面加载故障，可以自动刷新后继续。"""
 
 
 class PageStructureChanged(CloudflareError):
@@ -127,8 +130,9 @@ class CloudflareChecker:
         self._chrome_process: subprocess.Popen | None = None
         self._chrome_pid: int | None = None
         self._chrome_log = None
-        self._pid_file = self.profile_dir / "chrome-browser.pid"
-        self._port_file = self.profile_dir / "chrome-browser.port"
+        session_dir = self.profile_dir.parent / ".browser-sessions"
+        self._pid_file = session_dir / f"{self.profile_dir.name}.pid"
+        self._port_file = session_dir / f"{self.profile_dir.name}.port"
         self._cdp_session = None
         self._window_id: int | None = None
         self._reused_existing = False
@@ -231,19 +235,17 @@ class CloudflareChecker:
                 self.page.url,
             )
         except Exception as exc:
-            raise CloudflareError(f"无法打开{self.site_name}域名页面：{exc}") from exc
+            raise TransientPageError(f"{self.site_name}页面暂时无法打开：{exc}") from exc
 
     def _wait_for_debug_endpoint(self, port: int) -> None:
-        endpoint = f"http://127.0.0.1:{port}/json/version"
         deadline = time.monotonic() + 20
         last_error: Exception | None = None
         while time.monotonic() < deadline:
             if self._chrome_process and self._chrome_process.poll() is not None:
                 raise CloudflareError("Google Chrome 启动后立即退出。")
             try:
-                with urllib.request.urlopen(endpoint, timeout=1) as response:
-                    if response.status == 200:
-                        return
+                with socket.create_connection(("127.0.0.1", port), timeout=1):
+                    return
             except Exception as exc:
                 last_error = exc
             time.sleep(0.2)
@@ -252,8 +254,8 @@ class CloudflareChecker:
     @staticmethod
     def _debug_endpoint_available(port: int) -> bool:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as response:
-                return response.status == 200
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return True
         except Exception:
             return False
 
@@ -285,6 +287,21 @@ class CloudflareChecker:
         return matches
 
     def _find_existing_chrome(self) -> tuple[int, int] | None:
+        try:
+            recorded_pid = int(self._pid_file.read_text(encoding="utf-8").strip())
+            recorded_port = int(self._port_file.read_text(encoding="utf-8").strip())
+            if self._debug_endpoint_available(recorded_port):
+                command = subprocess.run(
+                    ["ps", "-p", str(recorded_pid), "-o", "command="],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                ).stdout
+                if str(self.profile_dir) in command and "Google Chrome" in command:
+                    return recorded_pid, recorded_port
+        except Exception:
+            pass
         for pid, command in self._matching_chrome_processes():
             port_match = re.search(r"--remote-debugging-port=(\d+)", command)
             if not port_match:
@@ -295,6 +312,7 @@ class CloudflareChecker:
         return None
 
     def _write_session_files(self, port: int) -> None:
+        self._pid_file.parent.mkdir(parents=True, exist_ok=True)
         if self._chrome_pid is not None:
             self._pid_file.write_text(str(self._chrome_pid), encoding="utf-8")
         self._port_file.write_text(str(port), encoding="utf-8")
@@ -377,6 +395,22 @@ class CloudflareChecker:
             return any(marker in body_text for marker in markers)
         except Exception:
             return False
+
+    def recover_page(self) -> None:
+        if not self.context:
+            raise TransientPageError("浏览器连接暂时不可用。")
+        try:
+            if not self.page or self.page.is_closed():
+                self.page = self.context.new_page()
+            current_url = self.page.url
+            target_url = current_url if current_url.startswith(("http://", "https://")) else self.site_url
+            try:
+                self.page.reload(wait_until="domcontentloaded", timeout=60_000)
+            except Exception:
+                self.page.goto(target_url, wait_until="domcontentloaded", timeout=60_000)
+            self.page.wait_for_timeout(3_000)
+        except Exception as exc:
+            raise TransientPageError(f"自动刷新暂时失败：{exc}") from exc
 
     def close(self, keep_browser: bool = False) -> None:
         try:
@@ -478,7 +512,9 @@ class CloudflareChecker:
                     raise VerificationRequired("Cloudflare要求进行安全验证。")
                 self.page.wait_for_timeout(500)
             if not button.is_enabled():
-                raise VerificationRequired("搜索按钮长时间不可用，可能需要完成Cloudflare验证。")
+                if self.verification_present():
+                    raise VerificationRequired("Cloudflare要求进行安全验证。")
+                raise TransientPageError("Cloudflare搜索按钮暂时不可用。")
             responses = []
 
             def capture_response(response):
@@ -497,26 +533,30 @@ class CloudflareChecker:
                         )
                     self.page.wait_for_timeout(500)
                 if not responses:
-                    raise VerificationRequired("等待查询结果超时，可能需要完成Cloudflare验证。")
+                    raise TransientPageError("Cloudflare查询结果暂时没有加载出来。")
                 response = responses[-1]
             finally:
                 self.page.remove_listener("response", capture_response)
             if response.status in (403, 429):
                 raise VerificationRequired("Cloudflare要求进行验证或暂时限制了查询。")
             if response.status != 200:
-                raise CloudflareError(f"Cloudflare查询返回HTTP {response.status}。")
+                raise TransientPageError(f"Cloudflare查询暂时返回HTTP {response.status}。")
             payload = response.json()
         except self._timeout_error as exc:
-            raise VerificationRequired("等待查询结果超时，可能需要完成Cloudflare验证。") from exc
+            if self.verification_present():
+                raise VerificationRequired("Cloudflare要求进行安全验证。") from exc
+            raise TransientPageError("Cloudflare页面加载超时。") from exc
         except VerificationRequired:
+            raise
+        except TransientPageError:
             raise
         except PageStructureChanged:
             raise
         except Exception as exc:
             message = str(exc).lower()
-            if "turnstile" in message or "challenge" in message or "timeout" in message:
+            if "turnstile" in message or "challenge" in message:
                 raise VerificationRequired("Cloudflare验证尚未完成。") from exc
-            raise CloudflareError(f"查询失败：{exc}") from exc
+            raise TransientPageError(f"Cloudflare查询页面暂时加载失败：{exc}") from exc
         if not isinstance(payload, dict):
             raise CloudflareError("Cloudflare返回了无法识别的数据。")
         return classify_response(normalized_domain, payload)

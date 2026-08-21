@@ -12,6 +12,7 @@ from .cloudflare import (
     STATUS_EXACT_AVAILABLE,
     CloudflareError,
     PageStructureChanged,
+    TransientPageError,
     VerificationRequired,
 )
 from .excel_store import ExcelStore, ExcelStoreError
@@ -115,7 +116,28 @@ class SearchWorker:
             excel.sync_found_rows(self.history.found_rows(), self.config.site_url)
             checker = self.checker_factory(self.config.site_url, self.config.profile_dir)
             self.emit("status", {"message": "正在启动后台浏览器…"})
-            checker.start()
+            startup_failures = 0
+            while not self.stop_event.is_set():
+                try:
+                    checker.start()
+                    break
+                except TransientPageError as exc:
+                    startup_failures += 1
+                    retry_seconds = min(60, max(5, startup_failures * 5))
+                    message = f"网站暂时打不开，{retry_seconds}秒后自动刷新重试（第{startup_failures}次）"
+                    logging.getLogger(__name__).warning("%s：%s", message, exc)
+                    self.emit("status", {"message": message})
+                    try:
+                        checker.close(keep_browser=True)
+                    except Exception:
+                        pass
+                    if self.stop_event.wait(retry_seconds):
+                        self._emit_manual_stop()
+                        return
+                    checker = self.checker_factory(self.config.site_url, self.config.profile_dir)
+            if self.stop_event.is_set():
+                self._emit_manual_stop()
+                return
             consecutive_verifications = 0
             if checker.verification_present():
                 consecutive_verifications += 1
@@ -126,6 +148,7 @@ class SearchWorker:
                         return
                     raise CloudflareError("等待验证超过10分钟，任务已停止。")
             self.emit("status", {"message": "正在查询"})
+            consecutive_page_failures = 0
 
             while not self.stop_event.is_set():
                 self.run_gate.wait()
@@ -147,7 +170,24 @@ class SearchWorker:
                     try:
                         self.emit("current", {"domain": item.domain, "pattern": item.pattern})
                         result = checker.query(item.domain)
+                        consecutive_page_failures = 0
                         break
+                    except TransientPageError as exc:
+                        consecutive_page_failures += 1
+                        retry_seconds = min(60, max(5, consecutive_page_failures * 5))
+                        message = (
+                            f"页面暂时未加载，{retry_seconds}秒后自动刷新继续"
+                            f"（第{consecutive_page_failures}次）"
+                        )
+                        logging.getLogger(__name__).warning("%s：%s", message, exc)
+                        self.emit("status", {"message": message})
+                        if self.stop_event.wait(retry_seconds):
+                            break
+                        try:
+                            checker.recover_page()
+                        except TransientPageError as recovery_exc:
+                            logging.getLogger(__name__).warning("自动刷新暂时失败：%s", recovery_exc)
+                        continue
                     except VerificationRequired as exc:
                         consecutive_verifications += 1
                         if consecutive_verifications >= 2:
