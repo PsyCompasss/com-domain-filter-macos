@@ -13,6 +13,9 @@ APP_DIR_NAME = "COM域名筛选器"
 
 
 def default_app_data_dir() -> Path:
+    override = os.environ.get("COM_DOMAIN_FILTER_DATA_DIR")
+    if override:
+        return Path(override).expanduser()
     return Path.home() / "Library" / "Application Support" / APP_DIR_NAME
 
 

@@ -1,4 +1,8 @@
 import unittest
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 from com_domain_filter.cloudflare import (
     STATUS_AVAILABLE_MISMATCH,
@@ -6,10 +10,19 @@ from com_domain_filter.cloudflare import (
     STATUS_EXACT_UNAVAILABLE,
     STATUS_NO_COM,
     classify_response,
+    find_system_chrome,
 )
 
 
 class CloudflareClassificationTests(unittest.TestCase):
+    def test_system_chrome_override_is_detected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            executable = Path(temp) / "Google Chrome"
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            executable.chmod(0o755)
+            with patch.dict(os.environ, {"COM_DOMAIN_FILTER_CHROME_PATH": str(executable)}):
+                self.assertEqual(find_system_chrome(), executable)
+
     def test_exact_available(self):
         payload = {
             "check_result": {"name": "abc123.com", "available": True, "can_register": True},

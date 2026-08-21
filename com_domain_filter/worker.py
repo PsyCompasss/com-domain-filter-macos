@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -107,7 +108,9 @@ class SearchWorker:
             checker = self.checker_factory(self.config.site_url, self.config.profile_dir)
             self.emit("status", {"message": "正在启动后台浏览器…"})
             checker.start()
+            consecutive_verifications = 0
             if checker.verification_present():
+                consecutive_verifications += 1
                 self.emit("verification", {"message": "Cloudflare在首次打开时要求进行安全验证。"})
                 if not checker.wait_for_verification(self.stop_event):
                     if self.stop_event.is_set():
@@ -137,12 +140,19 @@ class SearchWorker:
                         result = checker.query(item.domain)
                         break
                     except VerificationRequired as exc:
+                        consecutive_verifications += 1
+                        if consecutive_verifications >= 2:
+                            raise CloudflareError(
+                                "Cloudflare连续要求真人验证，任务已停止。请稍后重试；如果仍然循环，请检查代理、VPN或更换网络。"
+                            ) from exc
                         self.emit("verification", {"message": str(exc)})
                         if not checker.wait_for_verification(self.stop_event):
                             if self.stop_event.is_set():
                                 return
                             raise CloudflareError("等待验证超过10分钟，任务已停止。")
                         self.emit("status", {"message": "验证已完成，正在继续"})
+
+                consecutive_verifications = 0
 
                 if self.stop_event.is_set():
                     break
@@ -183,6 +193,8 @@ class SearchWorker:
                     break
             self.emit("finished", {"message": "已手动停止", "checked": self.checked, "found": self.found})
         except (CloudflareError, PageStructureChanged, ExcelStoreError, Exception) as exc:
+            if logging.getLogger().handlers:
+                logging.getLogger(__name__).exception("查询任务停止")
             self.emit("error", {"message": str(exc), "checked": self.checked, "found": self.found})
         finally:
             if checker:

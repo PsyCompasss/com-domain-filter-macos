@@ -25,10 +25,13 @@ STATUS_NAMES = {
 class DomainFilterApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
+        self.root.report_callback_exception = self._report_callback_exception
         self.root.title("COM域名筛选器")
         self.root.geometry("1120x820")
         self.root.minsize(980, 720)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind("<Command-Return>", lambda _event: self._start())
+        self.root.bind("<Control-Return>", lambda _event: self._start())
 
         self.app_data = default_app_data_dir()
         self.app_data.mkdir(parents=True, exist_ok=True)
@@ -159,6 +162,11 @@ class DomainFilterApp:
             text="第一版只适配 Cloudflare；地址可以修改，但主机必须是 domains.cloudflare.com。",
             foreground="#5F6368",
         ).grid(row=2, column=1, columnspan=4, sticky="w", padx=8, pady=(8, 0))
+        ttk.Label(
+            site_frame,
+            text="浏览器：系统 Google Chrome（使用独立资料目录和独立窗口，不操作你现有的标签页）",
+            foreground="#22577A",
+        ).grid(row=3, column=1, columnspan=4, sticky="w", padx=8, pady=(6, 0))
 
         speed_frame = ttk.LabelFrame(self.run_tab, text="查询速度", padding=12)
         speed_frame.pack(fill="x", pady=(0, 12))
@@ -247,7 +255,7 @@ class DomainFilterApp:
         self.resume_button.pack(side="left")
         self.stop_button = ttk.Button(bar, text="停止", command=self._stop, state="disabled")
         self.stop_button.pack(side="left", padx=8)
-        ttk.Label(bar, text="浏览器平时最小化运行；需要验证时会弹窗提醒。", foreground="#5F6368").pack(side="right")
+        ttk.Label(bar, text="系统 Chrome 专用窗口平时最小化；需要验证时会弹窗提醒。", foreground="#5F6368").pack(side="right")
 
     def _set_chars(self, selected: str, value: bool) -> None:
         selected_set = set(selected)
@@ -336,7 +344,7 @@ class DomainFilterApp:
             limit_found=limit_found,
             run_until_stopped=self.run_until_stopped_var.get(),
             excel_path=excel_path,
-            profile_dir=self.app_data / "browser-profile",
+            profile_dir=self.app_data / "google-chrome-profile",
         )
 
     def _start(self) -> None:
@@ -410,7 +418,7 @@ class DomainFilterApp:
             self.root.bell()
             messagebox.showwarning(
                 "需要Cloudflare验证",
-                f"{payload['message']}\n\n查询已经暂停。请在自动打开的浏览器窗口中完成验证；如果页面显示错误，请手动刷新。软件检测到搜索页面恢复后会自动继续。",
+                f"{payload['message']}\n\n查询已经暂停。请在自动打开的系统 Google Chrome 窗口中完成验证；如果验证再次循环，请停止任务，稍后重试或更换网络。软件不会自动绕过验证。",
             )
         elif event_type == "finished":
             self.status_var.set("已停止")
@@ -428,6 +436,18 @@ class DomainFilterApp:
         self.log.insert("end", text + "\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+
+    def _report_callback_exception(self, exc_type, exc_value, exc_traceback) -> None:
+        import logging
+
+        logging.getLogger(__name__).error(
+            "界面回调异常",
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+        messagebox.showerror(
+            "软件发生错误",
+            f"{exc_value}\n\n错误已经写入：{self.app_data / 'app.log'}",
+        )
 
     def _settings_dict(self) -> dict:
         return {

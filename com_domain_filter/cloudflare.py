@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import socket
 import subprocess
-import sys
 import time
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -63,24 +65,52 @@ def classify_response(query: str, payload: dict[str, Any]) -> QueryResult:
     return QueryResult(normalized, STATUS_NO_COM, returned_name, False, False)
 
 
-def configure_bundled_browser_path() -> None:
-    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-        return
-    candidates: list[Path] = []
-    if getattr(sys, "frozen", False):
-        executable = Path(sys.executable).resolve()
-        candidates.extend(
-            [
-                executable.parent.parent / "Resources" / "playwright-browsers",
-                Path(getattr(sys, "_MEIPASS", executable.parent)) / "playwright-browsers",
-            ]
+def find_system_chrome() -> Path | None:
+    override = os.environ.get("COM_DOMAIN_FILTER_CHROME_PATH")
+    if override:
+        override_path = Path(override).expanduser()
+        if override_path.is_file() and os.access(override_path, os.X_OK):
+            return override_path
+    candidates = [
+        Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ]
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", 'POSIX path of (path to application id "com.google.Chrome")'],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
-    project_bundle = Path(__file__).resolve().parents[1] / "playwright-browsers"
-    candidates.append(project_bundle)
+        if result.stdout.strip():
+            candidates.append(Path(result.stdout.strip()) / "Contents/MacOS/Google Chrome")
+    except Exception:
+        pass
+    try:
+        result = subprocess.run(
+            ["mdfind", "kMDItemCFBundleIdentifier == 'com.google.Chrome'"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            app_path = Path(line.strip())
+            if app_path.suffix == ".app":
+                candidates.append(app_path / "Contents/MacOS/Google Chrome")
+    except Exception:
+        pass
     for candidate in candidates:
-        if candidate.exists():
-            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(candidate)
-            return
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def _available_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
 
 
 class CloudflareChecker:
@@ -88,11 +118,16 @@ class CloudflareChecker:
         self.site_url = site_url.rstrip("/") + "/"
         self.profile_dir = Path(profile_dir)
         self._playwright = None
+        self.browser = None
         self.context = None
         self.page = None
+        self._chrome_process: subprocess.Popen | None = None
+        self._chrome_log = None
+        self._pid_file = self.profile_dir.parent / "chrome-browser.pid"
+        self._cdp_session = None
+        self._window_id: int | None = None
 
     def start(self) -> None:
-        configure_bundled_browser_path()
         try:
             from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
             from playwright.sync_api import sync_playwright
@@ -100,26 +135,109 @@ class CloudflareChecker:
             raise CloudflareError("缺少网页自动化组件，请重新安装软件。") from exc
         self._timeout_error = PlaywrightTimeoutError
         self.profile_dir.mkdir(parents=True, exist_ok=True)
-        self._playwright = sync_playwright().start()
+        chrome_path = find_system_chrome()
+        if not chrome_path:
+            raise CloudflareError("没有找到系统 Google Chrome，请先安装 Chrome 后再查询。")
+        logging.getLogger(__name__).info("使用系统 Google Chrome：%s", chrome_path)
+        self._stop_stale_chrome()
+        port = _available_local_port()
+        log_path = self.profile_dir.parent / "chrome-browser.log"
+        self._chrome_log = log_path.open("a", encoding="utf-8")
+        command = [
+            str(chrome_path),
+            f"--user-data-dir={self.profile_dir}",
+            f"--remote-debugging-port={port}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--new-window",
+            self.site_url,
+        ]
         try:
-            self.context = self._playwright.chromium.launch_persistent_context(
-                user_data_dir=str(self.profile_dir),
-                headless=False,
-                locale="zh-CN",
-                viewport={"width": 1280, "height": 850},
-                args=["--disable-background-timer-throttling"],
+            self._chrome_process = subprocess.Popen(
+                command,
+                stdout=self._chrome_log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
             )
+            self._pid_file.write_text(str(self._chrome_process.pid), encoding="utf-8")
+            self._wait_for_debug_endpoint(port)
         except Exception as exc:
-            self._playwright.stop()
-            self._playwright = None
-            raise CloudflareError(f"无法启动后台浏览器：{exc}") from exc
-        self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+            self._close_chrome_process()
+            raise CloudflareError(f"无法启动系统 Google Chrome：{exc}") from exc
         try:
-            self.page.goto(self.site_url, wait_until="domcontentloaded", timeout=60_000)
+            self._playwright = sync_playwright().start()
+            self.browser = self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+            self.context = self.browser.contexts[0]
+            self.page = next(
+                (page for page in self.context.pages if "domains.cloudflare.com" in page.url),
+                self.context.pages[0] if self.context.pages else self.context.new_page(),
+            )
+            self._cdp_session = self.context.new_cdp_session(self.page)
+            window = self._cdp_session.send("Browser.getWindowForTarget")
+            self._window_id = int(window["windowId"])
+        except Exception as exc:
+            if self._playwright:
+                self._playwright.stop()
+            self._playwright = None
+            self._close_chrome_process()
+            raise CloudflareError(f"无法连接系统 Google Chrome：{exc}") from exc
+        try:
+            if self.page.url.rstrip("/") != self.site_url.rstrip("/"):
+                self.page.goto(self.site_url, wait_until="domcontentloaded", timeout=60_000)
+            self.page.wait_for_load_state("load", timeout=60_000)
+            # Cloudflare 的搜索表单需要等客户端脚本接管；过早点击会退化为普通页面跳转，
+            # 不会调用 /api/search。
+            self.page.wait_for_timeout(3_000)
+            logging.getLogger(__name__).info(
+                "系统 Chrome 已连接，webdriver=%s，页面=%s",
+                self.page.evaluate("navigator.webdriver"),
+                self.page.url,
+            )
         except Exception as exc:
             raise CloudflareError(f"无法打开Cloudflare域名页面：{exc}") from exc
         if not self.verification_present():
             self.minimize_browser()
+
+    def _wait_for_debug_endpoint(self, port: int) -> None:
+        endpoint = f"http://127.0.0.1:{port}/json/version"
+        deadline = time.monotonic() + 20
+        last_error: Exception | None = None
+        while time.monotonic() < deadline:
+            if self._chrome_process and self._chrome_process.poll() is not None:
+                raise CloudflareError("Google Chrome 启动后立即退出。")
+            try:
+                with urllib.request.urlopen(endpoint, timeout=1) as response:
+                    if response.status == 200:
+                        return
+            except Exception as exc:
+                last_error = exc
+            time.sleep(0.2)
+        raise CloudflareError(f"等待 Google Chrome 启动超时：{last_error or '未知原因'}")
+
+    def _stop_stale_chrome(self) -> None:
+        if not self._pid_file.exists():
+            return
+        try:
+            pid = int(self._pid_file.read_text(encoding="utf-8").strip())
+            command = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            ).stdout
+            if str(self.profile_dir) in command and "Google Chrome" in command:
+                os.kill(pid, 15)
+                for _ in range(20):
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.1)
+        except Exception:
+            pass
+        finally:
+            self._pid_file.unlink(missing_ok=True)
 
     @staticmethod
     def _run_applescript(script: str) -> None:
@@ -135,12 +253,35 @@ class CloudflareChecker:
             pass
 
     def minimize_browser(self) -> None:
-        self._run_applescript('tell application "Chromium" to set miniaturized of every window to true')
+        if self._cdp_session and self._window_id is not None:
+            try:
+                self._cdp_session.send(
+                    "Browser.setWindowBounds",
+                    {"windowId": self._window_id, "bounds": {"windowState": "minimized"}},
+                )
+            except Exception:
+                pass
 
     def show_browser(self) -> None:
-        self._run_applescript(
-            'tell application "Chromium"\nactivate\nset miniaturized of every window to false\nend tell'
-        )
+        if self._cdp_session and self._window_id is not None:
+            try:
+                self._cdp_session.send(
+                    "Browser.setWindowBounds",
+                    {"windowId": self._window_id, "bounds": {"windowState": "normal"}},
+                )
+            except Exception:
+                pass
+        if self.page:
+            try:
+                self.page.bring_to_front()
+            except Exception:
+                pass
+        if self._chrome_process and self._chrome_process.poll() is None:
+            self._run_applescript(
+                'tell application "System Events" to set frontmost of first process whose unix id is '
+                + str(self._chrome_process.pid)
+                + " to true"
+            )
 
     def verification_present(self) -> bool:
         if not self.page:
@@ -164,14 +305,40 @@ class CloudflareChecker:
 
     def close(self) -> None:
         try:
-            if self.context:
-                self.context.close()
+            if self._cdp_session:
+                try:
+                    self._cdp_session.detach()
+                except Exception:
+                    pass
+            if self.browser:
+                self.browser.close()
         finally:
+            self.browser = None
             self.context = None
             self.page = None
+            self._cdp_session = None
+            self._window_id = None
             if self._playwright:
                 self._playwright.stop()
                 self._playwright = None
+            self._close_chrome_process()
+
+    def _close_chrome_process(self) -> None:
+        process = self._chrome_process
+        self._chrome_process = None
+        if process and process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=5)
+            except Exception:
+                logging.getLogger(__name__).warning("无法正常关闭专用 Chrome 进程", exc_info=True)
+        self._pid_file.unlink(missing_ok=True)
+        if self._chrome_log:
+            try:
+                self._chrome_log.close()
+            except Exception:
+                pass
+            self._chrome_log = None
 
     def _search_box(self):
         candidates = [
