@@ -16,7 +16,7 @@ from .cloudflare import (
     VerificationRequired,
 )
 from .excel_store import ExcelStore, ExcelStoreError
-from .patterns import PatternGenerator
+from .patterns import BIND_INDEPENDENT, BlockPatternGenerator, PatternGenerator
 from .storage import HistoryStore
 from .sites import create_checker
 
@@ -38,6 +38,9 @@ class RunConfig:
     run_until_stopped: bool
     excel_path: Path
     profile_dir: Path
+    blocks: tuple[dict, ...] = ()
+    binding_mode: str = BIND_INDEPENDENT
+    preferred_page_url: str = ""
 
 
 class SearchWorker:
@@ -58,7 +61,7 @@ class SearchWorker:
         self.thread: threading.Thread | None = None
         self.checked = 0
         self.found = 0
-        self.keep_browser_open_after_stop = False
+        self.keep_browser_open_after_stop = True
 
     @property
     def is_alive(self) -> bool:
@@ -79,7 +82,8 @@ class SearchWorker:
         self.emit("status", {"message": "正在查询"})
 
     def stop(self, keep_browser_open: bool = True) -> None:
-        self.keep_browser_open_after_stop = keep_browser_open
+        # 停止查询不等于关闭 Chrome。保留参数仅为兼容旧调用方。
+        self.keep_browser_open_after_stop = True
         self.stop_event.set()
         self.run_gate.set()
 
@@ -96,7 +100,7 @@ class SearchWorker:
             message += "；Chrome浏览器保持打开"
         self.emit("finished", {"message": message, "checked": self.checked, "found": self.found})
 
-    def _next_untested(self, generator: PatternGenerator):
+    def _next_untested(self, generator):
         for _ in range(2000):
             item = generator.generate()
             if not self.history.has_tested(item.domain):
@@ -106,26 +110,49 @@ class SearchWorker:
     def _run(self) -> None:
         checker = None
         try:
-            generator = PatternGenerator(
-                self.config.characters,
-                self.config.patterns,
-                self.config.prefix,
-                self.config.suffix,
-                self.config.unlimited_length,
-            )
+            if self.config.blocks:
+                generator = BlockPatternGenerator(
+                    self.config.characters,
+                    self.config.blocks,
+                    self.config.binding_mode,
+                )
+                metadata_prefix = ""
+                metadata_suffix = ""
+            else:
+                generator = PatternGenerator(
+                    self.config.characters,
+                    self.config.patterns,
+                    self.config.prefix,
+                    self.config.suffix,
+                    self.config.unlimited_length,
+                )
+                metadata_prefix = generator.prefix
+                metadata_suffix = generator.suffix
             excel = ExcelStore(self.config.excel_path)
             excel.sync_found_rows(self.history.found_rows(), self.config.site_url)
             checker = self.checker_factory(self.config.site_url, self.config.profile_dir)
-            self.emit("status", {"message": "正在启动后台浏览器…"})
+            self.emit("status", {"message": "正在连接已经打开的 Chrome…"})
             startup_failures = 0
             while not self.stop_event.is_set():
                 try:
-                    checker.start()
+                    try:
+                        checker.start(
+                            allow_launch=False,
+                            preferred_page_url=self.config.preferred_page_url or None,
+                        )
+                    except TypeError as exc:
+                        if "unexpected keyword" not in str(exc):
+                            raise
+                        checker.start()
                     break
                 except TransientPageError as exc:
                     startup_failures += 1
+                    if startup_failures >= 3:
+                        raise CloudflareError(
+                            "连续3次无法连接已经打开的 Chrome。请回到运行设置重新点击“打开/连接 Chrome”。"
+                        ) from exc
                     retry_seconds = self.config.retry_interval_seconds
-                    message = f"网站暂时打不开，{retry_seconds}秒后自动刷新重试（第{startup_failures}次）"
+                    message = f"Chrome连接暂时中断，{retry_seconds:g}秒后重试（第{startup_failures}次）"
                     logging.getLogger(__name__).warning("%s：%s", message, exc)
                     self.emit("status", {"message": message})
                     try:
@@ -174,8 +201,9 @@ class SearchWorker:
                     item.domain,
                     started_at,
                     item.pattern,
-                    generator.prefix,
-                    generator.suffix,
+                    metadata_prefix,
+                    metadata_suffix,
+                    site=self.config.site_url,
                 ):
                     continue
 
@@ -196,9 +224,10 @@ class SearchWorker:
                                 "query_failed",
                                 failed_at,
                                 item.pattern,
-                                generator.prefix,
-                                generator.suffix,
+                                metadata_prefix,
+                                metadata_suffix,
                                 str(exc),
+                                self.config.site_url,
                             )
                             self.checked += 1
                             self.emit(
@@ -258,8 +287,8 @@ class SearchWorker:
                         item.domain,
                         checked_at,
                         item.pattern,
-                        generator.prefix,
-                        generator.suffix,
+                        metadata_prefix,
+                        metadata_suffix,
                         self.config.site_url,
                     )
                     self.found += 1
@@ -272,9 +301,10 @@ class SearchWorker:
                     result.status,
                     checked_at,
                     item.pattern,
-                    generator.prefix,
-                    generator.suffix,
+                    metadata_prefix,
+                    metadata_suffix,
                     json.dumps({"returned_name": result.returned_name}, ensure_ascii=False),
+                    self.config.site_url,
                 )
                 self.checked += 1
                 self.emit(
@@ -297,6 +327,6 @@ class SearchWorker:
         finally:
             if checker:
                 try:
-                    checker.close(keep_browser=self.keep_browser_open_after_stop)
+                    checker.close(keep_browser=True)
                 except Exception:
                     pass

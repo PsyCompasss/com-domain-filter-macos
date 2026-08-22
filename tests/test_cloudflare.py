@@ -4,7 +4,7 @@ import tempfile
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from com_domain_filter.cloudflare import (
     STATUS_AVAILABLE_MISMATCH,
@@ -78,6 +78,39 @@ class CloudflareClassificationTests(unittest.TestCase):
             ):
                 self.assertIsNone(checker._find_existing_chrome())
 
+    def test_pending_chrome_keeps_its_original_port_while_endpoint_starts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profile = Path(temp) / "profile"
+            checker = CloudflareChecker("https://example.com/", profile)
+            command = (
+                f"4321 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome "
+                f"--user-data-dir={profile} --remote-debugging-port=45678 --new-window"
+            )
+            with patch(
+                "com_domain_filter.cloudflare.subprocess.run",
+                return_value=SimpleNamespace(stdout=command),
+            ):
+                self.assertEqual(checker._find_pending_chrome(), (4321, 45678))
+
+    def test_pending_chrome_prefers_the_port_assigned_by_current_launch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profile = Path(temp) / "profile"
+            checker = CloudflareChecker("https://example.com/", profile)
+            commands = "\n".join(
+                [
+                    f"4321 Google Chrome --user-data-dir={profile} --remote-debugging-port=45678",
+                    f"9876 Google Chrome --user-data-dir={profile} --remote-debugging-port=56789",
+                ]
+            )
+            with patch(
+                "com_domain_filter.cloudflare.subprocess.run",
+                return_value=SimpleNamespace(stdout=commands),
+            ):
+                self.assertEqual(
+                    checker._find_pending_chrome(preferred_port=56789),
+                    (9876, 56789),
+                )
+
     def test_recorded_session_outside_chrome_profile_is_reused_first(self):
         with tempfile.TemporaryDirectory() as temp:
             profile = Path(temp) / "profiles" / "wanwang.aliyun.com"
@@ -105,6 +138,30 @@ class CloudflareClassificationTests(unittest.TestCase):
                 patch.object(checker, "_pid_listening_on_port", return_value=38479),
             ):
                 self.assertEqual(checker._find_existing_chrome(), (38479, 54411))
+
+    def test_recorded_live_port_is_reused_when_pid_lookup_temporarily_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profile = Path(temp) / "profiles" / "wanwang.aliyun.com"
+            checker = CloudflareChecker("https://wanwang.aliyun.com/domain", profile)
+            checker._port_file.parent.mkdir(parents=True, exist_ok=True)
+            checker._port_file.write_text("54411", encoding="utf-8")
+            with (
+                patch.object(checker, "_debug_endpoint_available", return_value=True),
+                patch.object(checker, "_pid_listening_on_port", return_value=None),
+            ):
+                self.assertEqual(checker._find_existing_chrome(), (None, 54411))
+
+    def test_slow_startup_retry_reuses_recorded_free_port(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profile = Path(temp) / "profiles" / "wanwang.aliyun.com"
+            checker = CloudflareChecker("https://wanwang.aliyun.com/domain", profile)
+            checker._port_file.parent.mkdir(parents=True, exist_ok=True)
+            checker._port_file.write_text("54411", encoding="utf-8")
+            fake_socket = MagicMock()
+            fake_socket.__enter__.return_value = fake_socket
+            with patch("com_domain_filter.cloudflare.socket.socket", return_value=fake_socket):
+                self.assertEqual(checker._recorded_free_port(), 54411)
+                fake_socket.bind.assert_called_once_with(("127.0.0.1", 54411))
 
     def test_wait_for_existing_chrome_retries_transient_port_gap(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -7,7 +7,7 @@ from pathlib import Path
 from com_domain_filter.cloudflare import CloudflareChecker
 from com_domain_filter.sites import create_checker
 from com_domain_filter.storage import default_app_data_dir
-from com_domain_filter.ui import run
+from com_domain_filter.web_ui import run
 
 
 def configure_logging() -> Path:

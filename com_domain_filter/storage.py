@@ -42,10 +42,14 @@ class HistoryStore:
                     pattern TEXT NOT NULL,
                     prefix TEXT NOT NULL,
                     suffix TEXT NOT NULL,
-                    detail TEXT NOT NULL DEFAULT ''
+                    detail TEXT NOT NULL DEFAULT '',
+                    site TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(tested_domains)")}
+            if "site" not in columns:
+                connection.execute("ALTER TABLE tested_domains ADD COLUMN site TEXT NOT NULL DEFAULT ''")
 
     def has_tested(self, domain: str) -> bool:
         with self._connect() as connection:
@@ -63,15 +67,16 @@ class HistoryStore:
         prefix: str,
         suffix: str,
         detail: str = "",
+        site: str = "",
     ) -> bool:
         with self._connect() as connection:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO tested_domains
-                    (domain, status, checked_at, pattern, prefix, suffix, detail)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (domain, status, checked_at, pattern, prefix, suffix, detail, site)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (domain.lower(), status, checked_at, pattern, prefix, suffix, detail),
+                (domain.lower(), status, checked_at, pattern, prefix, suffix, detail, site),
             )
         return cursor.rowcount == 1
 
@@ -82,6 +87,7 @@ class HistoryStore:
         pattern: str,
         prefix: str,
         suffix: str,
+        site: str = "",
     ) -> bool:
         """在把域名发送给网站前占位，防止停止或崩溃后再次查询。"""
         return self.record(
@@ -92,6 +98,7 @@ class HistoryStore:
             prefix,
             suffix,
             "已发送查询；等待最终结果",
+            site,
         )
 
     def finalize(
@@ -103,24 +110,25 @@ class HistoryStore:
         prefix: str,
         suffix: str,
         detail: str = "",
+        site: str = "",
     ) -> bool:
         """把已占位的查询更新为最终结果。"""
         with self._connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE tested_domains
-                SET status = ?, checked_at = ?, pattern = ?, prefix = ?, suffix = ?, detail = ?
+                SET status = ?, checked_at = ?, pattern = ?, prefix = ?, suffix = ?, detail = ?, site = ?
                 WHERE domain = ?
                 """,
-                (status, checked_at, pattern, prefix, suffix, detail, domain.lower()),
+                (status, checked_at, pattern, prefix, suffix, detail, site, domain.lower()),
             )
         return cursor.rowcount == 1
 
-    def found_rows(self) -> list[tuple[str, str, str, str, str]]:
+    def found_rows(self) -> list[tuple[str, str, str, str, str, str]]:
         with self._connect() as connection:
             return connection.execute(
                 """
-                SELECT domain, checked_at, pattern, prefix, suffix
+                SELECT domain, checked_at, pattern, prefix, suffix, site
                 FROM tested_domains
                 WHERE status = 'exact_available'
                 ORDER BY checked_at, domain

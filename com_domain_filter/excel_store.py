@@ -98,10 +98,12 @@ class ExcelStore:
         self._atomic_save(workbook)
         return True
 
-    def sync_found_rows(self, rows: list[tuple[str, str, str, str, str]], site: str) -> int:
+    def sync_found_rows(self, rows: list[tuple], site: str) -> int:
         added = 0
-        for domain, checked_at, pattern, prefix, suffix in rows:
-            if self.append_if_new(domain, checked_at, pattern, prefix, suffix, site):
+        for row in rows:
+            domain, checked_at, pattern, prefix, suffix = row[:5]
+            saved_site = row[5] if len(row) > 5 and row[5] else site
+            if self.append_if_new(domain, checked_at, pattern, prefix, suffix, saved_site):
                 added += 1
         return added
 

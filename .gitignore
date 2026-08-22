@@ -6,6 +6,6 @@ build/
 dist/
 playwright-browsers/
 *.spec
+!COM域名筛选器.spec
 *.xlsx
 *.db
-

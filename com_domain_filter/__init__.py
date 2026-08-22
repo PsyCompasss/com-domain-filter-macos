@@ -1,3 +1,3 @@
 """COM domain filtering desktop application."""
 
-__version__ = "1.2.6"
+__version__ = "1.4.0"

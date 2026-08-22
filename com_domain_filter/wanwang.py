@@ -147,7 +147,6 @@ class WanwangChecker(CloudflareChecker):
         return classify_wanwang_cards(normalized_domain, cards)
 
     def wait_for_verification(self, stop_event: Event, timeout_seconds: int = 600) -> bool:
-        self.show_browser()
         deadline = time.monotonic() + timeout_seconds
         while not stop_event.is_set() and time.monotonic() < deadline:
             if not self.verification_present():

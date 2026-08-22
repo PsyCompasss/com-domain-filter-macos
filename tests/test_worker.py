@@ -132,7 +132,7 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(worker.checked, 2)
             self.assertEqual(worker.found, 2)
             self.assertTrue(any(kind == "finished" for kind, _ in events))
-            self.assertFalse(FakeChecker.instances[-1].keep_browser)
+            self.assertTrue(FakeChecker.instances[-1].keep_browser)
             workbook = load_workbook(config.excel_path)
             self.assertEqual(workbook[SHEET_NAME].max_row, 3)
 
@@ -264,7 +264,7 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(StartupTransientChecker.start_calls, 2)
             self.assertFalse(any(kind in {"error", "verification"} for kind, _ in events))
             self.assertTrue(
-                any(kind == "status" and "自动刷新重试" in payload["message"] for kind, payload in events)
+                any(kind == "status" and "Chrome连接暂时中断" in payload["message"] for kind, payload in events)
             )
 
 
