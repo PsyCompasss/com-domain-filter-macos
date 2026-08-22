@@ -15,6 +15,23 @@ class BrokenPage:
         raise OSError("temporary network failure")
 
 
+class FakeTextLocator:
+    def __init__(self, visible):
+        self.visible = visible
+        self.first = self
+
+    def count(self):
+        return int(self.visible)
+
+    def is_visible(self):
+        return self.visible
+
+
+class EmptyResultPage:
+    def get_by_text(self, text, exact=True):
+        return FakeTextLocator(text == "暂无搜索内容")
+
+
 class WanwangClassificationTests(unittest.TestCase):
     def test_exact_available(self):
         cards = [{"name": "abc123", "suffix": ".com", "text": "立即注册", "registerHref": "/commonbuy"}]
@@ -40,6 +57,11 @@ class WanwangClassificationTests(unittest.TestCase):
         checker._timeout_error = TimeoutError
         with self.assertRaises(TransientPageError):
             checker.query("abc.com")
+
+    def test_visible_empty_result_is_detected(self):
+        checker = WanwangChecker("https://wanwang.aliyun.com/domain", "/tmp/test-profile")
+        checker.page = EmptyResultPage()
+        self.assertTrue(checker._empty_result_present())
 
 
 if __name__ == "__main__":

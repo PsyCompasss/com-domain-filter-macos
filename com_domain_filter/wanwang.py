@@ -97,6 +97,13 @@ class WanwangChecker(CloudflareChecker):
             """
         )
 
+    def _empty_result_present(self) -> bool:
+        for text in ("暂无搜索内容", "暂无内容", "暂无数据"):
+            locator = self.page.get_by_text(text, exact=True)
+            if locator.count() and locator.first.is_visible():
+                return True
+        return False
+
     def query(self, domain: str) -> QueryResult:
         if not self.page:
             raise CloudflareError("浏览器尚未启动。")
@@ -110,9 +117,18 @@ class WanwangChecker(CloudflareChecker):
             while time.monotonic() < deadline:
                 if self.verification_present():
                     raise VerificationRequired("阿里云万网要求进行安全验证。")
+                if self._empty_result_present():
+                    return QueryResult(
+                        normalized_domain,
+                        STATUS_NO_COM,
+                        "",
+                        False,
+                        False,
+                        "万网显示暂无搜索内容",
+                    )
                 cards = self._result_cards()
-                if any(card.get("name") == search_term for card in cards):
-                    # 万网会分批渲染卡片，精确的 .com 有时晚于其他后缀出现。
+                if cards:
+                    # 万网会分批渲染卡片，精确的 .com 有时晚于其他结果出现。
                     self.page.wait_for_timeout(2_500)
                     cards = self._result_cards()
                     break

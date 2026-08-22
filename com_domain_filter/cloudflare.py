@@ -112,6 +112,10 @@ def find_system_chrome() -> Path | None:
     return None
 
 
+def chrome_app_bundle(executable: Path) -> Path | None:
+    return next((parent for parent in executable.parents if parent.suffix == ".app"), None)
+
+
 def _available_local_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
@@ -170,8 +174,14 @@ class CloudflareChecker:
             port = _available_local_port()
             log_path = self.profile_dir.parent / "chrome-browser.log"
             self._chrome_log = log_path.open("a", encoding="utf-8")
+            app_bundle = chrome_app_bundle(chrome_path)
+            if not app_bundle:
+                raise CloudflareError("无法确定系统 Google Chrome 的应用程序位置。")
             command = [
-                str(chrome_path),
+                "open",
+                "-na",
+                str(app_bundle),
+                "--args",
                 f"--user-data-dir={self.profile_dir}",
                 f"--remote-debugging-port={port}",
                 "--no-first-run",
@@ -180,18 +190,22 @@ class CloudflareChecker:
                 self.site_url,
             ]
             try:
-                self._chrome_process = subprocess.Popen(
+                launched = subprocess.run(
                     command,
                     stdout=self._chrome_log,
                     stderr=subprocess.STDOUT,
-                    start_new_session=True,
+                    check=False,
+                    timeout=15,
                 )
-                self._chrome_pid = self._chrome_process.pid
+                if launched.returncode != 0:
+                    raise CloudflareError(f"macOS 无法新建 Chrome 实例，退出码 {launched.returncode}。")
+                dedicated = self._wait_for_existing_chrome(timeout_seconds=20)
+                if not dedicated:
+                    raise CloudflareError("新建的专用 Chrome 没有开放连接端口。")
+                self._chrome_pid, port = dedicated
                 self._write_session_files(port)
-                self._wait_for_debug_endpoint(port)
+                self._close_chrome_log()
             except Exception as exc:
-                # Chrome 遇到相同资料目录时，可能把新请求转交给已经存在的窗口，
-                # 随后让刚启动的进程退出。此时应连接旧窗口，不能误报启动失败。
                 delegated = self._wait_for_existing_chrome(timeout_seconds=20)
                 if delegated:
                     self._chrome_process = None

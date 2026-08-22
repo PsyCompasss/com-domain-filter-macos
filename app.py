@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from com_domain_filter.cloudflare import CloudflareChecker
+from com_domain_filter.sites import create_checker
 from com_domain_filter.storage import default_app_data_dir
 from com_domain_filter.ui import run
 
@@ -38,8 +39,20 @@ def run_packaged_browser_restart_check(output_path: Path) -> None:
             }
         )
         checker.close(keep_browser=True)
+    report = {"cycles": cycles}
+    check_domain = os.environ.get("COM_DOMAIN_FILTER_CHECK_DOMAIN")
+    if check_domain:
+        checker = create_checker(site_url, profile_dir)
+        checker.start()
+        result = checker.query(check_domain)
+        report["query"] = {
+            "domain": result.query,
+            "status": result.status,
+            "detail": result.detail,
+        }
+        checker.close(keep_browser=True)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps({"cycles": cycles}, ensure_ascii=False, indent=2), encoding="utf-8")
+    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main() -> None:

@@ -20,6 +20,7 @@ STATUS_NAMES = {
     "available_mismatch": "可注册但名称不一致",
     "exact_unavailable": "完全一致但不可注册",
     "no_com": "结果中没有.com",
+    "query_failed": "页面连续失败，已跳过",
 }
 
 
@@ -222,7 +223,11 @@ class DomainFilterApp:
         self.interval_var = tk.StringVar(value="5")
         ttk.Entry(speed_frame, textvariable=self.interval_var, width=10).pack(side="left", padx=8)
         ttk.Label(speed_frame, text="秒").pack(side="left")
-        ttk.Label(speed_frame, text="数值越小，越容易触发验证或临时限制。", foreground="#9A6700").pack(side="left", padx=18)
+        ttk.Label(speed_frame, text="页面异常重试间隔").pack(side="left", padx=(24, 0))
+        self.retry_interval_var = tk.StringVar(value="10")
+        ttk.Entry(speed_frame, textvariable=self.retry_interval_var, width=10).pack(side="left", padx=8)
+        ttk.Label(speed_frame, text="秒").pack(side="left")
+        ttk.Label(speed_frame, text="连续失败3次会跳过该域名。", foreground="#9A6700").pack(side="left", padx=18)
 
         stop_frame = ttk.LabelFrame(self.run_tab, text="停止条件（可多选，任一条件先达到即停止）", padding=12)
         stop_frame.pack(fill="x", pady=(0, 12))
@@ -414,6 +419,12 @@ class DomainFilterApp:
             raise ValueError("查询间隔必须是数字。") from exc
         if interval <= 0:
             raise ValueError("查询间隔必须大于0秒。")
+        try:
+            retry_interval = float(self.retry_interval_var.get())
+        except ValueError as exc:
+            raise ValueError("页面异常重试间隔必须是数字。") from exc
+        if retry_interval <= 0:
+            raise ValueError("页面异常重试间隔必须大于0秒。")
         if not any(
             (self.limit_tests_enabled_var.get(), self.limit_found_enabled_var.get(), self.run_until_stopped_var.get())
         ):
@@ -437,6 +448,7 @@ class DomainFilterApp:
             suffix=suffix,
             unlimited_length=unlimited_length,
             interval_seconds=interval,
+            retry_interval_seconds=retry_interval,
             limit_tests_enabled=self.limit_tests_enabled_var.get(),
             limit_tests=limit_tests,
             limit_found_enabled=self.limit_found_enabled_var.get(),
@@ -559,6 +571,7 @@ class DomainFilterApp:
             "site_url": self.site_url_var.get(),
             "sites": self.sites,
             "interval": self.interval_var.get(),
+            "retry_interval": self.retry_interval_var.get(),
             "limit_tests_enabled": self.limit_tests_enabled_var.get(),
             "limit_tests": self.limit_tests_var.get(),
             "limit_found_enabled": self.limit_found_enabled_var.get(),
@@ -597,6 +610,7 @@ class DomainFilterApp:
             (self.site_name_var, "site_name"),
             (self.site_url_var, "site_url"),
             (self.interval_var, "interval"),
+            (self.retry_interval_var, "retry_interval"),
             (self.limit_tests_var, "limit_tests"),
             (self.limit_found_var, "limit_found"),
             (self.excel_path_var, "excel_path"),

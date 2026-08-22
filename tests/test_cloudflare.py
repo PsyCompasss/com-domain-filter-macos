@@ -12,6 +12,7 @@ from com_domain_filter.cloudflare import (
     STATUS_EXACT_UNAVAILABLE,
     STATUS_NO_COM,
     CloudflareChecker,
+    chrome_app_bundle,
     classify_response,
     find_system_chrome,
 )
@@ -38,6 +39,10 @@ class CloudflareClassificationTests(unittest.TestCase):
             executable.chmod(0o755)
             with patch.dict(os.environ, {"COM_DOMAIN_FILTER_CHROME_PATH": str(executable)}):
                 self.assertEqual(find_system_chrome(), executable)
+
+    def test_chrome_app_bundle_is_derived_from_executable(self):
+        executable = Path("/Volumes/Musa/App/Google Chrome.app/Contents/MacOS/Google Chrome")
+        self.assertEqual(chrome_app_bundle(executable), Path("/Volumes/Musa/App/Google Chrome.app"))
 
     def test_existing_dedicated_chrome_is_found_by_profile_and_debug_port(self):
         with tempfile.TemporaryDirectory() as temp:

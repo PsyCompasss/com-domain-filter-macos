@@ -30,6 +30,7 @@ class RunConfig:
     suffix: str
     unlimited_length: int
     interval_seconds: float
+    retry_interval_seconds: float
     limit_tests_enabled: bool
     limit_tests: int
     limit_found_enabled: bool
@@ -123,7 +124,7 @@ class SearchWorker:
                     break
                 except TransientPageError as exc:
                     startup_failures += 1
-                    retry_seconds = min(60, max(5, startup_failures * 5))
+                    retry_seconds = self.config.retry_interval_seconds
                     message = f"网站暂时打不开，{retry_seconds}秒后自动刷新重试（第{startup_failures}次）"
                     logging.getLogger(__name__).warning("%s：%s", message, exc)
                     self.emit("status", {"message": message})
@@ -179,6 +180,7 @@ class SearchWorker:
                     continue
 
                 result = None
+                skipped_after_failures = False
                 while not self.stop_event.is_set():
                     try:
                         self.emit("current", {"domain": item.domain, "pattern": item.pattern})
@@ -187,9 +189,32 @@ class SearchWorker:
                         break
                     except TransientPageError as exc:
                         consecutive_page_failures += 1
-                        retry_seconds = min(60, max(5, consecutive_page_failures * 5))
+                        if consecutive_page_failures >= 3:
+                            failed_at = datetime.now().astimezone().isoformat(timespec="seconds")
+                            self.history.finalize(
+                                item.domain,
+                                "query_failed",
+                                failed_at,
+                                item.pattern,
+                                generator.prefix,
+                                generator.suffix,
+                                str(exc),
+                            )
+                            self.checked += 1
+                            self.emit(
+                                "status",
+                                {"message": f"{item.domain} 连续3次加载失败，已跳过并继续下一个"},
+                            )
+                            self.emit(
+                                "progress",
+                                {"checked": self.checked, "found": self.found, "last_status": "query_failed"},
+                            )
+                            consecutive_page_failures = 0
+                            skipped_after_failures = True
+                            break
+                        retry_seconds = self.config.retry_interval_seconds
                         message = (
-                            f"页面暂时未加载，{retry_seconds}秒后自动刷新继续"
+                            f"页面暂时未加载，{retry_seconds:g}秒后自动刷新继续"
                             f"（第{consecutive_page_failures}次）"
                         )
                         logging.getLogger(__name__).warning("%s：%s", message, exc)
@@ -217,6 +242,14 @@ class SearchWorker:
 
                 consecutive_verifications = 0
 
+                if skipped_after_failures:
+                    reason = self._stop_reason()
+                    if reason:
+                        self.emit("finished", {"message": reason, "checked": self.checked, "found": self.found})
+                        return
+                    if self.stop_event.wait(self.config.interval_seconds):
+                        break
+                    continue
                 if result is None:
                     break
                 checked_at = datetime.now().astimezone().isoformat(timespec="seconds")

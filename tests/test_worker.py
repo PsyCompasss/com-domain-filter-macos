@@ -72,6 +72,14 @@ class TransientThenSuccessChecker(FakeChecker):
         type(self).recover_calls += 1
 
 
+class AlwaysTransientChecker(FakeChecker):
+    query_calls = 0
+
+    def query(self, domain):
+        type(self).query_calls += 1
+        raise TransientPageError("持续空白")
+
+
 class StartupTransientChecker(FakeChecker):
     start_calls = 0
 
@@ -97,6 +105,7 @@ class WorkerTests(unittest.TestCase):
             suffix="",
             unlimited_length=6,
             interval_seconds=0.01,
+            retry_interval_seconds=0.01,
             limit_tests_enabled=True,
             limit_tests=limit_tests,
             limit_found_enabled=False,
@@ -214,6 +223,27 @@ class WorkerTests(unittest.TestCase):
             self.assertTrue(
                 any(kind == "status" and "自动刷新继续" in payload["message"] for kind, payload in events)
             )
+
+    def test_single_domain_is_skipped_after_three_transient_failures(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            events = []
+            AlwaysTransientChecker.query_calls = 0
+            history = HistoryStore(root / "state.db")
+            worker = SearchWorker(
+                self.make_config(root, limit_tests=1),
+                history,
+                lambda kind, payload: events.append((kind, payload)),
+                checker_factory=AlwaysTransientChecker,
+            )
+            worker.stop_event = FastWaitEvent()
+            worker.start()
+            worker.thread.join(timeout=5)
+
+            self.assertFalse(worker.is_alive)
+            self.assertEqual(AlwaysTransientChecker.query_calls, 3)
+            self.assertEqual(worker.checked, 1)
+            self.assertTrue(any(kind == "status" and "已跳过" in payload["message"] for kind, payload in events))
 
     def test_transient_startup_failure_retries_without_error_popup(self):
         with tempfile.TemporaryDirectory() as temp:
