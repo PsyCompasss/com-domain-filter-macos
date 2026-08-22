@@ -199,14 +199,24 @@ class CloudflareChecker:
                 )
                 if launched.returncode != 0:
                     raise CloudflareError(f"macOS 无法新建 Chrome 实例，退出码 {launched.returncode}。")
-                dedicated = self._wait_for_existing_chrome(timeout_seconds=20)
-                if not dedicated:
-                    raise CloudflareError("新建的专用 Chrome 没有开放连接端口。")
-                self._chrome_pid, port = dedicated
+                # 这个端口是本次启动时由程序亲自分配的，直接等它开放最可靠。
+                # 不能依赖 ps 命令行扫描：GUI 应用环境下长命令曾被截断，
+                # 导致 Chrome 明明已经监听端口，软件仍误判为启动失败。
+                self._port_file.parent.mkdir(parents=True, exist_ok=True)
+                self._port_file.write_text(str(port), encoding="utf-8")
+                self._wait_for_debug_endpoint(port)
+                self._chrome_pid = self._pid_listening_on_port(port)
+                if self._chrome_pid is None:
+                    raise CloudflareError("Chrome 调试端口已开放，但无法确认专用 Chrome 进程。")
                 self._write_session_files(port)
+                logging.getLogger(__name__).info(
+                    "新建专用 Chrome 成功：pid=%s，port=%s",
+                    self._chrome_pid,
+                    port,
+                )
                 self._close_chrome_log()
             except Exception as exc:
-                delegated = self._wait_for_existing_chrome(timeout_seconds=20)
+                delegated = self._wait_for_existing_chrome(timeout_seconds=5)
                 if delegated:
                     self._chrome_process = None
                     self._chrome_pid, port = delegated
@@ -302,7 +312,7 @@ class CloudflareChecker:
     def _matching_chrome_processes(self) -> list[tuple[int, str]]:
         try:
             output = subprocess.run(
-                ["ps", "-axo", "pid=,command="],
+                ["/bin/ps", "-axww", "-o", "pid=,command="],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -326,7 +336,48 @@ class CloudflareChecker:
                 matches.append((int(pid_text), command))
         return matches
 
+    def _pid_listening_on_port(self, port: int) -> int | None:
+        """用监听端口反查 Chrome 主进程，避免长命令行被截断后无法识别。"""
+        try:
+            output = subprocess.run(
+                ["/usr/sbin/lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).stdout
+        except Exception:
+            output = ""
+        for pid_text in output.splitlines():
+            if not pid_text.strip().isdigit():
+                continue
+            pid = int(pid_text.strip())
+            try:
+                command = subprocess.run(
+                    ["/bin/ps", "-p", str(pid), "-o", "command="],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                ).stdout
+            except Exception:
+                continue
+            if str(self.profile_dir) in command and "Google Chrome" in command and "--type=" not in command:
+                return pid
+        for pid, command in self._matching_chrome_processes():
+            if f"--remote-debugging-port={port}" in command:
+                return pid
+        return None
+
     def _find_existing_chrome(self) -> tuple[int, int] | None:
+        try:
+            recorded_port = int(self._port_file.read_text(encoding="utf-8").strip())
+            if self._debug_endpoint_available(recorded_port):
+                listening_pid = self._pid_listening_on_port(recorded_port)
+                if listening_pid is not None:
+                    return listening_pid, recorded_port
+        except Exception:
+            pass
         try:
             recorded_pid = int(self._pid_file.read_text(encoding="utf-8").strip())
             recorded_port = int(self._port_file.read_text(encoding="utf-8").strip())

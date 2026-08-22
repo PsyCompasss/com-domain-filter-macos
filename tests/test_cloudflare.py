@@ -94,6 +94,18 @@ class CloudflareClassificationTests(unittest.TestCase):
             ):
                 self.assertEqual(checker._find_existing_chrome(), (4321, 45678))
 
+    def test_recorded_live_port_recovers_even_without_pid_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profile = Path(temp) / "profiles" / "wanwang.aliyun.com"
+            checker = CloudflareChecker("https://wanwang.aliyun.com/domain", profile)
+            checker._port_file.parent.mkdir(parents=True, exist_ok=True)
+            checker._port_file.write_text("54411", encoding="utf-8")
+            with (
+                patch.object(checker, "_debug_endpoint_available", return_value=True),
+                patch.object(checker, "_pid_listening_on_port", return_value=38479),
+            ):
+                self.assertEqual(checker._find_existing_chrome(), (38479, 54411))
+
     def test_wait_for_existing_chrome_retries_transient_port_gap(self):
         with tempfile.TemporaryDirectory() as temp:
             checker = CloudflareChecker("https://example.com/", Path(temp) / "profile")
