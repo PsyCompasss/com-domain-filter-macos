@@ -1,175 +1,249 @@
 <div align="center">
 
-<img src="assets/app-icon-b-v2.png" width="132" alt="COM域名筛选器图标">
+<img src="assets/app-icon-b-v2.png" width="128" alt="COM Domain Filter icon">
 
-# COM域名筛选器
+# COM 域名筛选器 · COM Domain Filter
 
-### 用你选定的字符和规律自动组合域名，在真实注册商页面筛选可注册的 `.com`
+### 在真实注册商页面自动组合、查询并整理可注册的 `.com` 域名
+### Generate, verify, and organize available `.com` domains on real registrar pages
 
 <p>
-  <img src="https://img.shields.io/badge/版本-v1.5.2-1769ff?style=flat-square" alt="版本 v1.5.2">
-  <img src="https://img.shields.io/badge/平台-macOS-111111?style=flat-square&logo=apple" alt="macOS">
-  <img src="https://img.shields.io/badge/芯片-Apple%20Silicon-555555?style=flat-square" alt="Apple Silicon">
+  <img src="https://img.shields.io/badge/version-v1.5.2-1769ff?style=flat-square" alt="Version v1.5.2">
+  <img src="https://img.shields.io/badge/platform-macOS-111111?style=flat-square&logo=apple" alt="macOS">
+  <img src="https://img.shields.io/badge/chip-Apple%20Silicon-555555?style=flat-square" alt="Apple Silicon">
   <img src="https://img.shields.io/badge/Python-3.12-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.12">
-  <img src="https://img.shields.io/badge/后缀-.com-12a150?style=flat-square" alt="只查询 .com">
+  <img src="https://img.shields.io/badge/TLD-.com-12a150?style=flat-square" alt=".com only">
 </p>
 
 <p>
-  <a href="https://github.com/PsyCompasss/com-domain-filter-macos/releases/latest"><strong>下载最新版</strong></a>
-  ·
-  <a href="#快速开始">快速开始</a>
-  ·
-  <a href="#使用说明">使用说明</a>
-  ·
-  <a href="#源码运行">源码运行</a>
+  <a href="https://github.com/PsyCompasss/com-domain-filter-macos/releases/latest"><strong>下载最新版 · Download</strong></a>
+  &nbsp;·&nbsp;
+  <a href="#快速开始--quick-start">快速开始 · Quick Start</a>
+  &nbsp;·&nbsp;
+  <a href="#常见问题--faq">常见问题 · FAQ</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/PsyCompasss/com-domain-filter-macos/issues">问题反馈 · Issues</a>
 </p>
 
 </div>
 
 ---
 
-## 软件简介
+## 软件简介 · Overview
 
-COM域名筛选器是一款 macOS 桌面软件。你可以自由选择字母、数字和连字符，再用“固定文字、常用规律、自定义规律、不限随机”组合块搭建域名结构。软件会在 Cloudflare Registrar 或阿里云万网页面逐个查询，只保存名称完全一致且可注册的 `.com` 域名。
+COM 域名筛选器是一款面向 macOS 的域名组合与查询工具。你可以自由选择字符、搭建规律、设置查询速度和停止条件。软件会通过 Cloudflare Registrar 或阿里云万网页面逐个核对结果，只把“名称完全一致、页面明确显示可注册”的 `.com` 域名写入 Excel。
 
-它适合需要长时间批量测试域名、又不想守在电脑前反复输入和整理结果的用户。
+COM Domain Filter is a macOS utility for generating and checking domain-name combinations. Choose your character pool, build reusable patterns, control the query pace, and set automatic stop conditions. The app checks each candidate on Cloudflare Registrar or Alibaba Cloud Wanwang and saves only exact-match `.com` domains that the registrar explicitly marks as available.
 
-## 核心功能
+> 软件不会购买或注册域名，也不会破解验证码。最终注册前，请在注册商页面再次确认价格和状态。
+>
+> The app never purchases or registers domains and does not bypass CAPTCHAs. Always confirm availability and pricing on the registrar before buying a domain.
 
-| | 功能 | 说明 |
+## 功能亮点 · Highlights
+
+| | 中文 | English |
 |:--:|---|---|
-| 🧩 | **自由组合域名结构** | 固定文字、常用规律、自定义规律和不限随机可以任意添加、排序、复制和删除 |
-| 🔤 | **可选字符池** | 自由勾选 26 个英文字母、10 个数字和半角连字符 `-` |
-| 🧬 | **灵活的规律关系** | 不同规律块可以独立随机，也可以让其中的 `A、B、C` 分别代表同一个字符 |
-| 🎯 | **只保留精确结果** | 只记录名称完全一致且页面明确显示可注册的 `.com` 域名 |
-| 🌐 | **支持两个查询网站** | 已适配 Cloudflare Registrar 和阿里云万网 |
-| 🔄 | **自动恢复查询** | 页面临时打不开、空白或加载超时时，会按设定间隔自动刷新并继续 |
-| 🛑 | **三种停止条件** | 可按检测数量、找到数量或手动停止控制任务 |
-| 📊 | **统一写入 Excel** | 所有可注册结果追加到同一个 Excel 文件，并自动去重 |
-| 🧠 | **查询历史管理** | 可以查看、搜索、导出或删除已查询记录；删除后可重新查询相应域名 |
-| ⏯️ | **暂停后修改规则** | 暂停期间修改组合规则，继续时从下一条域名开始采用新规则 |
-| 🖱️ | **适合后台运行** | 软件不会自动最小化、移动或关闭 Chrome；用户可以正常处理其他工作 |
+| 🧩 | **积木式域名组合**：固定文字、常用规律、自定义规律和不限随机可以任意添加、排序、复制和删除 | **Block-based builder:** Add, reorder, duplicate, or remove fixed text, presets, custom patterns, and unrestricted random blocks |
+| 🔤 | **自定义字符池**：自由选择 26 个字母、10 个数字和半角连字符 `-` | **Custom character pool:** Select any combination of 26 letters, 10 digits, and the ASCII hyphen `-` |
+| 🧬 | **灵活的占位符关系**：不同规律块可以独立随机，也可以让 `A、B、C` 在多个规律块之间共用字符 | **Flexible placeholder binding:** Generate each pattern independently or share `A`, `B`, and `C` across multiple blocks |
+| 🎯 | **严格核对 `.com`**：只有完整域名一致、注册状态明确时才进入下一条 | **Strict `.com` verification:** Continue only after the exact domain and its registration state are confirmed |
+| 🌐 | **多网站适配**：支持 Cloudflare Registrar 和阿里云万网 | **Multiple registrars:** Supports Cloudflare Registrar and Alibaba Cloud Wanwang |
+| 🔄 | **自动恢复**：页面空白、结果延迟或临时加载失败时自动刷新当前查询 | **Automatic recovery:** Refreshes and retries the current query after blank pages, delayed results, or temporary failures |
+| ⏯️ | **可暂停修改规则**：暂停期间修改组合，继续后从下一条域名采用新规则 | **Edit while paused:** Updated rules take effect from the next domain after resuming |
+| 🧠 | **查询历史管理**：查看、搜索、筛选、导出或删除记录；删除后可以重新查询 | **History management:** View, search, filter, export, or delete records; deleted domains can be checked again |
+| 📊 | **自动写入 Excel**：可注册结果集中保存并自动去重 | **Excel export:** Saves exact available results to one workbook with automatic deduplication |
+| 🖥️ | **适合长时间后台运行**：软件不会自动移动、最小化或关闭 Chrome | **Background friendly:** Never moves, minimizes, or closes Chrome automatically |
 
-## 界面预览
+## 界面预览 · Interface
 
-### 生成规则
+### 生成规则 · Rule Builder
 
-自由搭建域名结构，实时查看组合结果与域名长度。
+选择字符池，用组合块搭建域名结构，并实时预览结果与长度。
+
+Select a character pool, assemble pattern blocks, and preview the generated structure and length in real time.
 
 <p align="center">
-  <img src="docs/images/ui-rules-v1.4.0.png" width="100%" alt="生成规则界面">
+  <img src="docs/images/ui-rules-v1.4.0.png" width="100%" alt="Rule builder interface">
 </p>
 
 <table>
   <tr>
-    <td width="50%" align="center"><strong>运行设置</strong></td>
-    <td width="50%" align="center"><strong>可注册结果</strong></td>
+    <td width="50%" align="center"><strong>运行设置 · Run Settings</strong></td>
+    <td width="50%" align="center"><strong>查询结果 · Available Results</strong></td>
   </tr>
   <tr>
-    <td><img src="docs/images/ui-run-v1.4.0.png" alt="运行设置界面"></td>
-    <td><img src="docs/images/ui-results-v1.4.0.png" alt="可注册结果界面"></td>
+    <td><img src="docs/images/ui-run-v1.4.0.png" alt="Run settings interface"></td>
+    <td><img src="docs/images/ui-results-v1.4.0.png" alt="Available results interface"></td>
   </tr>
   <tr>
-    <td>连接查询网站、设置速度、自动刷新、停止条件和 Excel 路径。</td>
-    <td>实时查看已经确认可注册的域名，并直接打开结果文件。</td>
+    <td>连接查询网站，设置查询速度、刷新间隔、停止条件和 Excel 路径。<br><br>Connect a registrar and configure query speed, refresh delay, stop conditions, and Excel output.</td>
+    <td>查看已确认可注册的域名，并直接打开结果文件。<br><br>Review confirmed available domains and open the result workbook directly.</td>
   </tr>
 </table>
 
-## 组合方式
-
-域名由多个组合块从左到右拼接，每一个位置都可以自由选择类型。
+## 工作流程 · How It Works
 
 ```text
-固定文字 + 常用规律 + 不限随机 + 自定义规律 + 固定文字
-   abc   +    ABC   +    4位    +    ABCBA   +     88
+选择字符与规律             连接软件专用 Chrome
+Choose characters/rules  → Connect the dedicated Chrome window
+                                      ↓
+保存精确可注册结果         在注册商页面逐条确认 .com
+Save exact available     ← Verify each .com on the registrar page
 ```
 
-- **固定文字**：直接保留你输入的内容，例如 `abc`、`88`。
-- **常用规律**：快速选择 `AAA`、`AABB`、`ABCABC` 等预设结构。
-- **自定义规律**：输入任意占位结构，例如 `ABCDDDD`、`ABCBA`。
-- **不限随机**：从字符池中随机生成指定长度的内容。
-- **独立随机**：每个规律块分别抽取自己的字符。
-- **共用字符**：所有规律块中的 `A` 共用一个字符，`B`、`C` 依次类推。
+1. 软件根据字符池和组合块生成候选名称。
+   The app generates candidate names from your selected characters and blocks.
+2. 查询时只提交名称部分，例如搜索 `abc`，而不是 `abc.com`。
+   Only the name is submitted—for example, `abc`, not `abc.com`.
+3. 软件等待页面出现名称完全一致的 `.com` 条目，并确认其状态。
+   The app waits for the exact `.com` entry and confirms its registration status.
+4. 只有明确显示可注册的结果才写入可注册结果 Excel；所有查询状态均可在历史页查看。
+   Only explicitly available domains are saved to the availability workbook; every query status remains visible in history.
 
-> 规律字母是“占位符”，不是固定输出内容。同一个规律中的相同字母代表相同字符，不同字母代表不同字符。
+## 组合规则 · Pattern Builder
 
-## 快速开始
+域名由多个组合块从左到右拼接，每个位置都可以自由选择类型。
 
-### 1. 下载
+A domain is assembled from left to right using any number of configurable blocks.
 
-[前往 Releases 下载最新版 Mac 软件](https://github.com/PsyCompasss/com-domain-filter-macos/releases/latest)
+```text
+固定文字      常用规律      不限随机      自定义规律      固定文字
+Fixed text + Preset     + Random      + Custom      + Fixed text
+    abc    +    ABC     +   4 chars   +   ABCBA     +     88
+```
 
-当前提供的是 **Apple Silicon Mac** 版本。
+- **固定文字 · Fixed text**：保留输入内容，例如 `abc`、`88`。
+- **常用规律 · Preset**：快速使用 `AAA`、`AABB`、`ABCABC` 等结构。
+- **自定义规律 · Custom pattern**：输入任意占位结构，例如 `ABCDDDD`、`ABCBA`。
+- **不限随机 · Unrestricted random**：从字符池随机生成指定长度的内容。
+- **独立随机 · Independent binding**：每个规律块分别抽取自己的字符。
+- **共用字符 · Shared binding**：所有规律块中的 `A` 共用一个字符，`B`、`C` 依次类推。
 
-### 2. 打开软件
+> 规律字母是占位符，不是固定输出内容。同一规律中的相同字母代表相同字符，不同字母代表不同字符。
+>
+> Pattern letters are placeholders, not literal output. Repeated letters reuse the same character; different letters represent different characters.
 
-解压 ZIP 文件后打开 `COM域名筛选器.app`。如果 macOS 第一次打开时进行安全确认，可以在 Finder 中右键点击软件，再选择“打开”。
+## 快速开始 · Quick Start
 
-### 3. 连接 Chrome
+### 系统要求 · Requirements
 
-在“运行设置”页面选择查询网站，点击“打开/连接 Chrome”。顶部显示“准备就绪”以后，再开始查询。
+- macOS
+- Apple Silicon Mac
+- 已安装 Google Chrome · Google Chrome installed
 
-## 使用说明
+### 1. 下载 · Download
 
-1. 在“生成规则”中勾选允许使用的字符。
-2. 添加所需的组合块，并调整它们的先后顺序。
-3. 选择规律块之间采用“独立随机”还是“共用字符”。
-4. 在“运行设置”中选择 Cloudflare 或阿里云万网。
-5. 设置查询间隔、页面异常自动刷新间隔、停止条件和 Excel 保存路径。
-6. 点击“打开/连接 Chrome”，等待状态变为“准备就绪”。
-7. 点击“开始查询”。软件只会把名称部分输入搜索框，不会把 `.com` 一起输入。
+[前往 Releases 下载最新版 / Download the latest release](https://github.com/PsyCompasss/com-domain-filter-macos/releases/latest)
 
-## Chrome 与后台运行
+当前安装包仅提供 Apple Silicon 版本。
+The current build is available for Apple Silicon only.
 
-- 软件使用 Mac 已安装的 Google Chrome，不会操作你平时打开的标签页。
-- 只有“打开/连接 Chrome”按钮可以创建软件专用的 Chrome 窗口。
-- “开始查询”只连接已经准备好的窗口，不会另开 Chrome。
+### 2. 打开软件 · Open the App
+
+解压 ZIP 后打开 `COM域名筛选器.app`。如果 macOS 首次启动时拦截应用，请在 Finder 中右键点击软件并选择“打开”。
+
+Extract the ZIP and open `COM域名筛选器.app`. If macOS blocks the first launch, right-click the app in Finder and choose **Open**.
+
+> 当前安装包采用本地临时签名，尚未进行 Apple Developer ID 公证，因此首次打开时可能出现安全确认。
+>
+> The current package uses an ad-hoc local signature and is not notarized with an Apple Developer ID, so macOS may display a security confirmation on first launch.
+
+### 3. 连接 Chrome · Connect Chrome
+
+在“运行设置”中选择查询网站，点击“打开/连接 Chrome”。顶部显示“准备就绪”后即可开始。
+
+Choose a registrar under **Run Settings**, click **Open / Connect Chrome**, and wait until the status changes to **Ready**.
+
+## Chrome、隐私与后台运行 · Chrome, Privacy & Background Use
+
+- 软件使用独立的 Chrome 窗口和资料目录，不会操作你平时打开的标签页。
+  The app uses a dedicated Chrome window and profile without touching your regular tabs.
+- 只有“打开/连接 Chrome”会创建软件专用窗口；“开始查询”只使用已连接的窗口。
+  Only **Open / Connect Chrome** creates the dedicated window; **Start** uses the existing connection.
 - 软件不会自动最小化、置前、移动或关闭 Chrome。
-- 你可以手动最小化 Chrome，查询仍会继续。
-- 点击“停止”只结束当前查询，不会关闭 Chrome。
-- 修改规则后，可以重新连接原来的专用窗口并再次开始。
+  The app never minimizes, focuses, moves, or closes Chrome automatically.
+- 点击“停止”只结束当前任务，不会关闭 Chrome。
+  **Stop** ends the current task without closing Chrome.
+- 查询历史、设置和日志保存在本机，不会由本项目上传到服务器。
+  Query history, settings, and logs remain on your Mac and are not uploaded by this project.
 
-## 自动刷新与真人验证
-
-- 页面空白、结果加载超时或临时网络故障时，软件会按设定间隔自动刷新。
-- 同一个域名连续失败 3 次后会自动跳过，避免任务一直卡住。
-- 只有网站明确要求真人验证时，软件才会暂停并提醒。
-- 验证码需要在 Chrome 中由用户本人完成，软件不会破解或绕过验证。
-- 如果连续两次遇到验证，软件会停止当前任务，避免反复打扰。
-
-查询速度过快更容易触发验证或临时限制，建议根据网站实际情况设置间隔。
-
-## 结果与数据
-
-- Excel 只记录名称完全一致且可注册的 `.com` 域名。
-- 软件内部会保存已经测试过的域名，用于去重和断点续查。
-- “已查询记录”页面可以搜索、筛选、导出或删除历史；删除记录后，对应域名可以重新查询。
-- 更换 Excel 路径时，已经找到的可注册结果会同步到新文件。
-- 内部状态和错误日志保存在：
+本地数据目录 · Local data directory:
 
 ```text
 ~/Library/Application Support/COM域名筛选器/
 ```
 
-## 支持的网站
+## 结果与状态 · Results & Statuses
 
-| 网站 | 地址 | 状态 |
+- 可注册结果 Excel 只记录名称完全一致且可注册的 `.com`。
+  The availability workbook contains only exact-match `.com` domains confirmed as available.
+- “已查询记录”页面保留可注册、已注册、未确认和查询失败等状态。
+  The history page retains available, registered, unconfirmed, and failed statuses.
+- 删除历史记录后，对应域名可以重新查询；删除历史不会删除已有的可注册结果 Excel。
+  Deleting a history record allows that domain to be checked again and does not remove existing availability results from Excel.
+- 所有任务可以追加到同一个结果文件，并自动去重。
+  Multiple runs can append to one deduplicated result workbook.
+
+## 支持的网站 · Supported Registrars
+
+| 网站 · Registrar | 地址 · URL | 状态 · Status |
 |---|---|:--:|
-| Cloudflare Registrar | `https://domains.cloudflare.com/` | 已适配 |
-| 阿里云万网 | `https://wanwang.aliyun.com/domain` | 已适配 |
+| Cloudflare Registrar | `https://domains.cloudflare.com/` | ✅ 已适配 · Supported |
+| 阿里云万网 · Alibaba Cloud Wanwang | `https://wanwang.aliyun.com/domain` | ✅ 已适配 · Supported |
 
-软件可以保存其他网站的名称和地址，但必须编写对应的页面适配器后才能查询。
+可以在界面中保存其他网站，但查询前仍需为该网站编写页面适配器。
 
-## 使用边界
+Other websites can be saved in the interface, but each one still requires a dedicated page adapter before it can be queried.
 
-- 软件只查询域名状态，不会购买、注册域名或提交付款。
-- 查询网站的页面结构、接口或反自动化策略发生变化时，软件可能需要更新。
-- 网站显示的结果可能随时间变化，准备注册前请在注册商页面再次确认。
-- 当前安装包只适配 Apple Silicon Mac。
+## 真人验证与查询频率 · CAPTCHA & Query Rate
 
-## 源码运行
+- 查询太快更容易触发验证码或临时限制，请根据网站情况设置合理间隔。
+  Faster queries are more likely to trigger CAPTCHAs or temporary rate limits; choose a responsible interval.
+- 页面空白、结果延迟或临时网络故障时，软件会按设置自动刷新。
+  Blank pages, delayed results, and temporary network failures are retried using the configured refresh delay.
+- 同一域名连续失败三次后会跳过，避免任务永久卡住。
+  A domain is skipped after three consecutive transient failures so the run does not stall indefinitely.
+- 验证码必须由用户本人完成，软件不会破解或绕过网站安全机制。
+  CAPTCHAs must be completed manually; the app does not defeat or bypass website security controls.
 
-需要 Python 3.12 和已安装的 Google Chrome：
+## 常见问题 · FAQ
+
+<details>
+<summary><strong>为什么只记录 `.com`？ · Why are only `.com` domains saved?</strong></summary>
+<br>
+这是本项目的明确范围。即使页面同时显示其他后缀，软件也只判断并保存名称完全一致的 `.com`。
+<br><br>
+This project is intentionally scoped to `.com`. Other extensions may appear on the page, but only the exact `.com` result is evaluated and saved.
+</details>
+
+<details>
+<summary><strong>为什么有些域名显示“查询失败”？ · Why is a domain marked as “Query failed”?</strong></summary>
+<br>
+通常表示网站在多次重试后仍未给出可确认的精确 `.com` 状态，或页面临时加载异常。可以在“已查询记录”中删除该条记录后重新查询。
+<br><br>
+This usually means the registrar did not provide a confirmable exact `.com` status after multiple retries, or the page failed temporarily. Delete the record from Query History to check it again.
+</details>
+
+<details>
+<summary><strong>软件会自动购买域名吗？ · Can the app purchase domains?</strong></summary>
+<br>
+不会。软件只查询并整理结果，不会登录账户、加入购物车、提交订单或付款。
+<br><br>
+No. The app only checks and organizes results. It does not sign in, add items to a cart, place orders, or make payments.
+</details>
+
+<details>
+<summary><strong>为什么需要单独的 Chrome 窗口？ · Why is a dedicated Chrome window required?</strong></summary>
+<br>
+独立窗口让软件可以稳定保存连接信息和网站状态，同时避免影响用户平时使用的标签页。用户仍然可以手动最小化该窗口，查询会继续运行。
+<br><br>
+A dedicated window provides a stable browser connection and session while keeping regular browsing tabs untouched. You may minimize it manually while queries continue.
+</details>
+
+## 源码运行 · Run from Source
+
+需要 Python 3.12 和 Google Chrome。
+Python 3.12 and Google Chrome are required.
 
 ```bash
 git clone https://github.com/PsyCompasss/com-domain-filter-macos.git
@@ -179,26 +253,37 @@ python3.12 -m venv .venv
 .venv/bin/python app.py
 ```
 
-## 测试
+### 测试 · Tests
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-## 构建 Mac 软件
+### 构建 macOS 软件 · Build the macOS App
 
-安装依赖后双击：
+安装依赖后双击 `重新构建Mac软件.command`。
+After installing the dependencies, double-click `重新构建Mac软件.command`.
 
-```text
-重新构建Mac软件.command
-```
+构建脚本会生成 `.app` 和 ZIP。正式分发前仍需根据发布渠道完成 Developer ID 签名、公证和渠道要求的审核。
 
-构建脚本会生成 `.app` 和 ZIP 安装包。正式发布前仍需根据发布方式完成签名、公证和实际 Mac 环境测试。
+The build script produces an `.app` bundle and a ZIP archive. Public distribution may still require Developer ID signing, notarization, and channel-specific review.
+
+## 版本记录 · Changelog
+
+- [v1.5.2 release notes](docs/releases/v1.5.2.md)
+- [All GitHub Releases](https://github.com/PsyCompasss/com-domain-filter-macos/releases)
+
+## 反馈问题 · Feedback
+
+如果你发现网站页面发生变化、结果判断异常或界面问题，请在 [GitHub Issues](https://github.com/PsyCompasss/com-domain-filter-macos/issues) 中提交可复现步骤、软件版本和已脱敏的截图。
+
+If a registrar changes its page, a result is classified incorrectly, or the UI behaves unexpectedly, please open a [GitHub Issue](https://github.com/PsyCompasss/com-domain-filter-macos/issues) with reproducible steps, the app version, and a redacted screenshot.
 
 ---
 
 <div align="center">
 
-只查询 `.com` · 只保存完全一致且可注册的结果
+**只查询 `.com` · 只保存完全一致且可注册的结果**
+**`.com` only · Exact-match available results only**
 
 </div>
