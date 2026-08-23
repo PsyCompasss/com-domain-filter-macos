@@ -14,6 +14,7 @@
         <button class="nav-item active" data-page="rules"><span class="nav-icon">▦</span>生成规则</button>
         <button class="nav-item" data-page="run"><span class="nav-icon">⚙</span>运行设置</button>
         <button class="nav-item" data-page="results"><span class="nav-icon">✓</span>可注册结果</button>
+        <button class="nav-item" data-page="history"><span class="nav-icon">▤</span>已查询记录</button>
       </nav>
       <div class="sidebar-foot">
         <div id="sideVersion">版本</div>
@@ -161,6 +162,49 @@
             <div class="button-row"><input id="resultSearch" type="search" placeholder="搜索域名、规律或网站"><button id="resultOpenFolder" class="btn">打开文件夹</button><button id="resultOpenExcel" class="btn primary">打开 Excel</button></div>
           </div>
           <div class="table-wrap"><table><thead><tr><th>域名</th><th>规律组合</th><th>查询网站</th><th>查询时间</th><th>状态</th></tr></thead><tbody id="resultBody"></tbody></table></div>
+        </div>
+      </section>
+
+      <section id="page-history" class="page">
+        <div class="stat-grid">
+          <div class="stat-card blue"><span>已查询总数</span><strong id="historyTotal">0</strong></div>
+          <div class="stat-card purple"><span>已选择</span><strong id="historySelected">0</strong></div>
+          <div class="stat-card green"><span>导出格式</span><strong>Excel</strong></div>
+        </div>
+        <div class="card results-card">
+          <div class="card-head horizontal">
+            <div><h2>已查询记录</h2><p>删除记录后，对应域名可以重新查询；已有的可注册结果 Excel 不会被删除</p></div>
+            <div class="button-row history-actions">
+              <input id="historySearch" type="search" placeholder="搜索域名、状态、规律或网站">
+              <select id="historyStatus">
+                <option value="">全部状态</option>
+                <option value="exact_available">名称一致且可注册</option>
+                <option value="exact_unavailable">名称一致但已注册</option>
+                <option value="available_mismatch">名称不一致</option>
+                <option value="no_com">未确认到 .com 结果</option>
+                <option value="query_failed">查询失败</option>
+                <option value="query_started">查询未完成</option>
+              </select>
+            </div>
+          </div>
+          <div class="history-file-row">
+            <input id="historyExcelPath" type="text" class="full-input">
+            <button id="chooseHistoryExcel" class="btn">选择路径…</button>
+            <button id="exportHistory" class="btn">导出 / 更新 Excel</button>
+            <button id="openHistoryExcel" class="btn primary">打开 Excel</button>
+          </div>
+          <div class="history-delete-row">
+            <label class="history-check-all"><input id="historyCheckAll" type="checkbox"> 选择当前列表</label>
+            <span id="historyFilterCount" class="hint">0 条记录</span>
+            <button id="deleteSelectedHistory" class="btn danger" disabled>删除选中记录</button>
+            <button id="clearHistory" class="btn danger">清空全部记录</button>
+          </div>
+          <div class="table-wrap history-table-wrap">
+            <table class="history-table">
+              <thead><tr><th class="select-col"></th><th>域名</th><th>查询状态</th><th>规律组合</th><th>查询网站</th><th>查询时间</th></tr></thead>
+              <tbody id="historyBody"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 

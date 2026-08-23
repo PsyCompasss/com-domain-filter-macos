@@ -139,6 +139,34 @@ class HistoryStore:
         with self._connect() as connection:
             return int(connection.execute("SELECT COUNT(*) FROM tested_domains").fetchone()[0])
 
+    def history_rows(self) -> list[tuple[str, str, str, str, str, str, str, str]]:
+        """返回全部已查询记录，最新记录排在最前。"""
+        with self._connect() as connection:
+            return connection.execute(
+                """
+                SELECT domain, status, checked_at, pattern, prefix, suffix, detail, site
+                FROM tested_domains
+                ORDER BY checked_at DESC, domain
+                """
+            ).fetchall()
+
+    def delete_domains(self, domains: list[str] | tuple[str, ...]) -> int:
+        normalized = tuple(dict.fromkeys(str(item).strip().lower() for item in domains if str(item).strip()))
+        if not normalized:
+            return 0
+        placeholders = ",".join("?" for _ in normalized)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                f"DELETE FROM tested_domains WHERE domain IN ({placeholders})",
+                normalized,
+            )
+        return int(cursor.rowcount)
+
+    def clear(self) -> int:
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM tested_domains")
+        return int(cursor.rowcount)
+
 
 class SettingsStore:
     def __init__(self, path: Path) -> None:

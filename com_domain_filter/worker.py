@@ -62,6 +62,8 @@ class SearchWorker:
         self.checked = 0
         self.found = 0
         self.keep_browser_open_after_stop = True
+        self._generation_lock = threading.Lock()
+        self._pending_generation: tuple[tuple[str, ...], tuple[dict, ...], str] | None = None
 
     @property
     def is_alive(self) -> bool:
@@ -80,6 +82,26 @@ class SearchWorker:
     def resume(self) -> None:
         self.run_gate.set()
         self.emit("status", {"message": "正在查询"})
+
+    def update_rules(
+        self,
+        characters: tuple[str, ...],
+        blocks: tuple[dict, ...],
+        binding_mode: str,
+    ) -> None:
+        # 先构造一次，确保错误规则不会在后台线程里才爆出。
+        BlockPatternGenerator(characters, blocks, binding_mode)
+        with self._generation_lock:
+            self._pending_generation = (characters, blocks, binding_mode)
+
+    def _take_pending_generation(self):
+        with self._generation_lock:
+            pending = self._pending_generation
+            self._pending_generation = None
+        if pending is None:
+            return None
+        characters, blocks, binding_mode = pending
+        return BlockPatternGenerator(characters, blocks, binding_mode), "", ""
 
     def stop(self, keep_browser_open: bool = True) -> None:
         # 停止查询不等于关闭 Chrome。保留参数仅为兼容旧调用方。
@@ -182,6 +204,10 @@ class SearchWorker:
                 self.run_gate.wait()
                 if self.stop_event.is_set():
                     break
+                changed = self._take_pending_generation()
+                if changed is not None:
+                    generator, metadata_prefix, metadata_suffix = changed
+                    self.emit("status", {"message": "新规则已生效，正在按修改后的规则继续查询"})
                 reason = self._stop_reason()
                 if reason:
                     self.emit("finished", {"message": reason, "checked": self.checked, "found": self.found})
@@ -232,7 +258,7 @@ class SearchWorker:
                             self.checked += 1
                             self.emit(
                                 "status",
-                                {"message": f"{item.domain} 连续3次加载失败，已跳过并继续下一个"},
+                                {"message": f"{item.domain} 连续3次未能确认查询结果，已记录失败并已跳过，继续下一个"},
                             )
                             self.emit(
                                 "progress",
@@ -243,7 +269,7 @@ class SearchWorker:
                             break
                         retry_seconds = self.config.retry_interval_seconds
                         message = (
-                            f"页面暂时未加载，{retry_seconds:g}秒后自动刷新继续"
+                            f"查询结果暂时无法确认，{retry_seconds:g}秒后自动刷新重试"
                             f"（第{consecutive_page_failures}次）"
                         )
                         logging.getLogger(__name__).warning("%s：%s", message, exc)

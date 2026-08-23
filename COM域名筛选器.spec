@@ -55,11 +55,11 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='COM域名筛选器.app',
-    icon='assets/app-icon-b-v1.icns',
+    icon='assets/app-icon-b-v2.icns',
     bundle_identifier='com.psycompass.com-domain-filter',
     info_plist={
-        'CFBundleShortVersionString': '1.4.0',
-        'CFBundleVersion': '1.4.0',
+        'CFBundleShortVersionString': '1.5.2',
+        'CFBundleVersion': '1.5.2',
         'NSHighResolutionCapable': True,
     },
 )

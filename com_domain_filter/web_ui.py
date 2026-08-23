@@ -11,6 +11,7 @@ import webview
 
 from . import __version__
 from .browser_connection import open_or_connect_browser
+from .excel_store import HistoryExcelStore, STATUS_LABELS
 from .patterns import (
     ALLOWED_CHARACTERS,
     BIND_INDEPENDENT,
@@ -62,6 +63,7 @@ class WebApi:
             "limit_found": "100",
             "run_until_stopped": False,
             "excel_path": str(Path.home() / "Documents" / "可注册COM域名.xlsx"),
+            "history_excel_path": str(Path.home() / "Documents" / "已查询COM域名.xlsx"),
         }
 
     def _settings(self) -> dict:
@@ -87,6 +89,24 @@ class WebApi:
             })
         return rows
 
+    def _history_rows(self) -> list[dict]:
+        rows = []
+        for domain, status, checked_at, pattern, prefix, suffix, detail, site in self.history.history_rows():
+            rows.append(
+                {
+                    "domain": domain,
+                    "status": status,
+                    "status_label": STATUS_LABELS.get(status, status),
+                    "time": checked_at,
+                    "pattern": pattern,
+                    "prefix": prefix,
+                    "suffix": suffix,
+                    "detail": detail,
+                    "site": site or "历史记录",
+                }
+            )
+        return rows
+
     def initial_state(self) -> dict:
         return {
             "ok": True,
@@ -95,6 +115,7 @@ class WebApi:
             "allowed_characters": list(ALLOWED_CHARACTERS),
             "settings": self._settings(),
             "results": self._results(),
+            "history": self._history_rows(),
             "tested_total": self.history.total_count(),
         }
 
@@ -229,10 +250,20 @@ class WebApi:
             self.worker.pause()
         return {"ok": True}
 
-    def resume_search(self) -> dict:
-        if self.worker:
+    def resume_search(self, payload: dict | None = None) -> dict:
+        if not self.worker or not self.worker.is_alive:
+            return {"ok": False, "message": "当前没有可继续的查询任务。"}
+        try:
+            if payload is not None:
+                characters, blocks, binding = self._normalized_payload(payload)
+                self.worker.update_rules(characters, blocks, binding)
+                self.save_settings(payload)
             self.worker.resume()
-        return {"ok": True}
+            return {"ok": True}
+        except (ValueError, PatternConfigurationError) as exc:
+            return {"ok": False, "message": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
 
     def stop_search(self) -> dict:
         if self.worker:
@@ -254,6 +285,72 @@ class WebApi:
             if not str(path).lower().endswith(".xlsx"):
                 path = f"{path}.xlsx"
             return {"ok": True, "path": str(path)}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def choose_history_excel(self, current_path: str) -> dict:
+        try:
+            current = Path(current_path).expanduser()
+            result = self.window.create_file_dialog(
+                webview.FileDialog.SAVE,
+                directory=str(current.parent),
+                save_filename=current.name or "已查询COM域名.xlsx",
+                file_types=("Excel 工作簿 (*.xlsx)",),
+            )
+            if not result:
+                return {"ok": True, "path": ""}
+            path = result[0] if isinstance(result, (tuple, list)) else result
+            if not str(path).lower().endswith(".xlsx"):
+                path = f"{path}.xlsx"
+            return {"ok": True, "path": str(path)}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def history_state(self) -> dict:
+        return {
+            "ok": True,
+            "history": self._history_rows(),
+            "results": self._results(),
+            "tested_total": self.history.total_count(),
+        }
+
+    def export_history(self, path: str) -> dict:
+        try:
+            target = Path(path).expanduser()
+            count = HistoryExcelStore(target).export(self.history.history_rows())
+            settings = self._settings()
+            settings["history_excel_path"] = str(target)
+            self.settings_store.save(settings)
+            return {"ok": True, "path": str(target), "count": count}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def open_history_excel(self, path: str) -> dict:
+        exported = self.export_history(path)
+        if not exported.get("ok"):
+            return exported
+        subprocess.Popen(["open", exported["path"]])
+        return exported
+
+    def delete_history(self, domains: list[str]) -> dict:
+        if self.worker and self.worker.is_alive:
+            return {"ok": False, "message": "请先停止当前查询，再删除已查询记录。"}
+        try:
+            deleted = self.history.delete_domains(domains)
+            state = self.history_state()
+            state.update({"deleted": deleted})
+            return state
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def clear_history(self) -> dict:
+        if self.worker and self.worker.is_alive:
+            return {"ok": False, "message": "请先停止当前查询，再清空已查询记录。"}
+        try:
+            deleted = self.history.clear()
+            state = self.history_state()
+            state.update({"deleted": deleted})
+            return state
         except Exception as exc:
             return {"ok": False, "message": str(exc)}
 

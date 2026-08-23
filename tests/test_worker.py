@@ -89,6 +89,19 @@ class StartupTransientChecker(FakeChecker):
             raise TransientPageError("网站暂时打不开")
 
 
+class RuleChangeChecker(FakeChecker):
+    started = threading.Event()
+    release = threading.Event()
+    domains = []
+
+    def query(self, domain):
+        type(self).domains.append(domain)
+        if len(type(self).domains) == 1:
+            type(self).started.set()
+            type(self).release.wait(timeout=5)
+        return super().query(domain)
+
+
 class FastWaitEvent(threading.Event):
     def wait(self, timeout=None):
         return super().wait(0)
@@ -221,7 +234,7 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(TransientThenSuccessChecker.recover_calls, 1)
             self.assertFalse(any(kind in {"error", "verification"} for kind, _ in events))
             self.assertTrue(
-                any(kind == "status" and "自动刷新继续" in payload["message"] for kind, payload in events)
+                any(kind == "status" and "自动刷新重试" in payload["message"] for kind, payload in events)
             )
 
     def test_single_domain_is_skipped_after_three_transient_failures(self):
@@ -266,6 +279,44 @@ class WorkerTests(unittest.TestCase):
             self.assertTrue(
                 any(kind == "status" and "Chrome连接暂时中断" in payload["message"] for kind, payload in events)
             )
+
+    def test_resume_applies_latest_rules_before_next_domain(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            events = []
+            RuleChangeChecker.started.clear()
+            RuleChangeChecker.release.clear()
+            RuleChangeChecker.domains = []
+            base = self.make_config(root, limit_tests=2)
+            config = RunConfig(
+                **{
+                    **base.__dict__,
+                    "prefix": "",
+                    "blocks": ({"kind": "unlimited", "value": "", "length": 4},),
+                }
+            )
+            worker = SearchWorker(
+                config,
+                HistoryStore(root / "state.db"),
+                lambda kind, payload: events.append((kind, payload)),
+                checker_factory=RuleChangeChecker,
+            )
+            worker.start()
+            self.assertTrue(RuleChangeChecker.started.wait(timeout=5))
+            worker.pause()
+            RuleChangeChecker.release.set()
+            worker.update_rules(
+                config.characters,
+                ({"kind": "unlimited", "value": "", "length": 10},),
+                "independent",
+            )
+            worker.resume()
+            worker.thread.join(timeout=5)
+
+            self.assertFalse(worker.is_alive)
+            self.assertEqual(len(RuleChangeChecker.domains[0].removesuffix(".com")), 4)
+            self.assertEqual(len(RuleChangeChecker.domains[1].removesuffix(".com")), 10)
+            self.assertTrue(any(kind == "status" and "新规则已生效" in payload["message"] for kind, payload in events))
 
 
 if __name__ == "__main__":
