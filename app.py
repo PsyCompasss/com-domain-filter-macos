@@ -57,7 +57,7 @@ def run_packaged_browser_restart_check(output_path: Path) -> None:
 
 def main() -> None:
     log_path = configure_logging()
-    logging.info("COM域名筛选器启动，Python=%s", sys.version.split()[0])
+    logging.info("全网域名筛选器启动，Python=%s", sys.version.split()[0])
     try:
         packaged_check_output = os.environ.get("COM_DOMAIN_FILTER_CHECK_OUTPUT")
         if packaged_check_output:
@@ -72,7 +72,7 @@ def main() -> None:
 
             root = tk.Tk()
             root.withdraw()
-            messagebox.showerror("COM域名筛选器无法启动", f"{exc}\n\n错误日志：{log_path}")
+            messagebox.showerror("全网域名筛选器无法启动", f"{exc}\n\n错误日志：{log_path}")
             root.destroy()
         except Exception:
             pass

@@ -14,11 +14,14 @@ from typing import Any
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
+from .tlds import ascii_domain, ascii_tld, domains_equal, unicode_domain
+
 
 STATUS_EXACT_AVAILABLE = "exact_available"
 STATUS_AVAILABLE_MISMATCH = "available_mismatch"
 STATUS_EXACT_UNAVAILABLE = "exact_unavailable"
 STATUS_NO_COM = "no_com"
+STATUS_NO_SUFFIX = STATUS_NO_COM
 
 
 class CloudflareError(RuntimeError):
@@ -48,24 +51,41 @@ class QueryResult:
 
 
 def classify_response(query: str, payload: dict[str, Any]) -> QueryResult:
-    normalized = query.strip().lower()
+    normalized = unicode_domain(query)
+    target_suffix = f".{normalized.rsplit('.', 1)[1]}" if "." in normalized else ".com"
     check = payload.get("check_result") or {}
-    returned_name = str(check.get("name") or "").lower()
+    returned_name = unicode_domain(str(check.get("name") or ""))
     available = bool(check.get("available"))
     can_register = bool(check.get("can_register"))
 
-    if returned_name == normalized:
+    if returned_name and domains_equal(returned_name, normalized):
         if available and can_register:
             return QueryResult(normalized, STATUS_EXACT_AVAILABLE, returned_name, True, True)
         return QueryResult(normalized, STATUS_EXACT_UNAVAILABLE, returned_name, available, can_register)
 
-    com_domains = [
+    exact_domain = next(
+        (
+            item for item in (payload.get("domains") or [])
+            if domains_equal(str(item.get("name") or ""), normalized)
+        ),
+        None,
+    )
+    if exact_domain is not None:
+        availability = str(exact_domain.get("availability") or "").strip().lower()
+        item_available = availability == "available" or bool(exact_domain.get("available"))
+        item_can_register = exact_domain.get("can_register")
+        if item_available and item_can_register is not False:
+            return QueryResult(normalized, STATUS_EXACT_AVAILABLE, normalized, True, True)
+        if availability in {"registered", "unavailable", "taken", "premium"} or item_can_register is False:
+            return QueryResult(normalized, STATUS_EXACT_UNAVAILABLE, normalized, False, False)
+
+    suffix_domains = [
         item for item in (payload.get("domains") or [])
-        if str(item.get("name") or "").lower().endswith(".com")
+        if ascii_domain(str(item.get("name") or "")).endswith(ascii_tld(target_suffix))
     ]
-    available_com = [item for item in com_domains if item.get("availability") == "available"]
-    if available_com:
-        first_name = str(available_com[0].get("name") or "").lower()
+    available_suffix = [item for item in suffix_domains if item.get("availability") == "available"]
+    if available_suffix:
+        first_name = unicode_domain(str(available_suffix[0].get("name") or ""))
         return QueryResult(normalized, STATUS_AVAILABLE_MISMATCH, first_name, True, True)
     return QueryResult(normalized, STATUS_NO_COM, returned_name, False, False)
 
@@ -615,11 +635,9 @@ class CloudflareChecker:
                 return candidate.first
         raise PageStructureChanged("找不到搜索按钮，Cloudflare页面结构可能已经变化。")
 
-    def query(self, domain: str) -> QueryResult:
+    def _query_payload(self, search_term: str) -> dict[str, Any]:
         if not self.page:
             raise CloudflareError("浏览器尚未启动。")
-        normalized_domain = domain.strip().lower()
-        search_term = normalized_domain[:-4] if normalized_domain.endswith(".com") else normalized_domain
         box = self._search_box()
         button = self._search_button()
         try:
@@ -677,7 +695,22 @@ class CloudflareChecker:
             raise TransientPageError(f"Cloudflare查询页面暂时加载失败：{exc}") from exc
         if not isinstance(payload, dict):
             raise CloudflareError("Cloudflare返回了无法识别的数据。")
+        return payload
+
+    def query(self, domain: str) -> QueryResult:
+        normalized_domain = unicode_domain(domain)
+        search_term = normalized_domain.rsplit(".", 1)[0] if "." in normalized_domain else normalized_domain
+        payload = self._query_payload(search_term)
         return classify_response(normalized_domain, payload)
+
+    def query_group(self, stem: str, suffixes: tuple[str, ...]) -> dict[str, QueryResult]:
+        """只提交一次主体搜索，并从同一份 Cloudflare 响应读取全部目标后缀。"""
+        normalized_stem = stem.strip().lower().strip(".")
+        payload = self._query_payload(normalized_stem)
+        return {
+            f"{normalized_stem}{suffix}": classify_response(f"{normalized_stem}{suffix}", payload)
+            for suffix in suffixes
+        }
 
     def wait_for_verification(self, stop_event: Event, timeout_seconds: int = 600) -> bool:
         if not self.page:

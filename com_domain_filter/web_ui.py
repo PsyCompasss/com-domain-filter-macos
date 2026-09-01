@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
 import webview
+from openpyxl import load_workbook
 
 from . import __version__
 from .browser_connection import open_or_connect_browser
@@ -17,13 +19,21 @@ from .patterns import (
     BIND_INDEPENDENT,
     BLOCK_COMMON,
     BlockPatternGenerator,
+    ContainmentRule,
+    ImportedDomainGenerator,
     PATTERNS,
     PatternBlock,
     PatternConfigurationError,
+    normalize_domain_suffixes,
+    normalize_imported_domains,
 )
 from .sites import DEFAULT_SITES, checker_for_url
 from .storage import HistoryStore, SettingsStore, default_app_data_dir
+from .tlds import IANA_TLDS, suffix_catalog_groups
 from .worker import RunConfig, SearchWorker
+
+
+HOMEPAGE_URL = "https://github.com/PsyCompasss/com-domain-filter-macos"
 
 
 def _resource_path(*parts: str) -> Path:
@@ -51,6 +61,19 @@ class WebApi:
             "characters": list(ALLOWED_CHARACTERS),
             "blocks": [{"kind": BLOCK_COMMON, "value": "AAA", "length": 3}],
             "binding_mode": BIND_INDEPENDENT,
+            "containment_rules": [],
+            "domain_suffixes": [".com"],
+            "source_mode": "generator",
+            "imported_domains": [],
+            "imported_file": "",
+            "quick_templates": [
+                {"kind": "unlimited", "value": "", "length": 4, "name": "不限"},
+                *[
+                    {"kind": "common", "value": pattern, "length": 1, "name": pattern}
+                    for pattern in PATTERNS
+                    if pattern != "不限"
+                ],
+            ],
             "site_name": "Cloudflare",
             "site_url": "https://domains.cloudflare.com/",
             "sites": [dict(item) for item in DEFAULT_SITES],
@@ -92,11 +115,20 @@ class WebApi:
     def _history_rows(self) -> list[dict]:
         rows = []
         for domain, status, checked_at, pattern, prefix, suffix, detail, site in self.history.history_rows():
+            status_label = STATUS_LABELS.get(status, status)
+            if status == "no_com" and detail:
+                try:
+                    parsed_detail = json.loads(detail)
+                    missing_detail = str(parsed_detail.get("detail", ""))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    missing_detail = str(detail)
+                if missing_detail.startswith("页面无 "):
+                    status_label = missing_detail.split("；", 1)[0]
             rows.append(
                 {
                     "domain": domain,
                     "status": status,
-                    "status_label": STATUS_LABELS.get(status, status),
+                    "status_label": status_label,
                     "time": checked_at,
                     "pattern": pattern,
                     "prefix": prefix,
@@ -113,6 +145,8 @@ class WebApi:
             "version": __version__,
             "patterns": [item for item in PATTERNS if item != "不限"],
             "allowed_characters": list(ALLOWED_CHARACTERS),
+            "domain_suffix_catalog": list(IANA_TLDS),
+            "domain_suffix_groups": suffix_catalog_groups(),
             "settings": self._settings(),
             "results": self._results(),
             "history": self._history_rows(),
@@ -120,23 +154,61 @@ class WebApi:
         }
 
     @staticmethod
-    def _normalized_payload(payload: dict) -> tuple[tuple[str, ...], tuple[dict, ...], str]:
+    def _normalized_payload(
+        payload: dict,
+    ) -> tuple[tuple[str, ...], tuple[dict, ...], str, tuple[dict, ...], tuple[str, ...]]:
         characters = tuple(dict.fromkeys(str(item).lower() for item in payload.get("characters", [])))
         raw_blocks = payload.get("blocks", [])
         blocks = tuple(PatternBlock.from_dict(item).normalized().to_dict() for item in raw_blocks)
         binding = str(payload.get("binding_mode", BIND_INDEPENDENT))
-        BlockPatternGenerator(characters, blocks, binding)
-        return characters, blocks, binding
+        containment_rules = tuple(
+            ContainmentRule.from_dict(item).normalized().to_dict()
+            for item in payload.get("containment_rules", [])
+        )
+        domain_suffixes = normalize_domain_suffixes(payload.get("domain_suffixes", [".com"]))
+        BlockPatternGenerator(characters, blocks, binding, containment_rules, domain_suffixes)
+        return characters, blocks, binding, containment_rules, domain_suffixes
+
+    @staticmethod
+    def _normalized_imported(payload: dict) -> tuple[str, ...]:
+        return normalize_imported_domains(
+            payload.get("imported_domains", []),
+            payload.get("domain_suffixes", [".com"]),
+        )
 
     def preview(self, payload: dict) -> dict:
         try:
-            characters, blocks, binding = self._normalized_payload(payload)
-            generator = BlockPatternGenerator(characters, blocks, binding, rng=random.Random(7))
-            samples = [generator.generate().domain for _ in range(3)]
-            length = len(samples[0]) - 4
+            if str(payload.get("source_mode", "generator")) == "import":
+                domain_suffixes = normalize_domain_suffixes(payload.get("domain_suffixes", [".com"]))
+                generator = ImportedDomainGenerator(self._normalized_imported(payload), domain_suffixes)
+                generated = []
+                for _ in range(min(3, generator.estimated_space())):
+                    generated.append(generator.generate())
+                samples = [item.domain for item in generated]
+                return {
+                    "ok": True,
+                    "samples": samples,
+                    "sample_groups": [list(item.query_domains) for item in generated],
+                    "length": max((len(item.split(".", 1)[0]) for item in samples), default=0),
+                    "space": generator.estimated_space(),
+                    "imported": True,
+                }
+            characters, blocks, binding, containment_rules, domain_suffixes = self._normalized_payload(payload)
+            generator = BlockPatternGenerator(
+                characters,
+                blocks,
+                binding,
+                containment_rules,
+                domain_suffixes,
+                rng=random.Random(7),
+            )
+            generated = [generator.generate() for _ in range(3)]
+            samples = [item.domain for item in generated]
+            length = len(samples[0].split(".", 1)[0])
             return {
                 "ok": True,
                 "samples": samples,
+                "sample_groups": [list(item.query_domains) for item in generated],
                 "length": length,
                 "space": generator.estimated_space(),
             }
@@ -203,7 +275,16 @@ class WebApi:
             site_url, profile_dir = self._validated_site(str(payload.get("site_url", "")))
             if site_url.rstrip("/") != self.connected_site_url.rstrip("/"):
                 raise ValueError("当前网站与已连接网站不一致，请重新连接 Chrome。")
-            characters, blocks, binding = self._normalized_payload(payload)
+            source_mode = str(payload.get("source_mode", "generator"))
+            if source_mode not in {"generator", "import"}:
+                raise ValueError("请选择正确的域名来源。")
+            if source_mode == "import":
+                imported_domains = self._normalized_imported(payload)
+                characters, blocks, binding, containment_rules = (), (), BIND_INDEPENDENT, ()
+                domain_suffixes = normalize_domain_suffixes(payload.get("domain_suffixes", [".com"]))
+            else:
+                characters, blocks, binding, containment_rules, domain_suffixes = self._normalized_payload(payload)
+                imported_domains = ()
             interval = float(payload.get("interval", 5))
             retry_interval = float(payload.get("retry_interval", 10))
             if interval <= 0 or retry_interval <= 0:
@@ -235,6 +316,10 @@ class WebApi:
                 blocks=blocks,
                 binding_mode=binding,
                 preferred_page_url=str(payload.get("preferred_page_url", self.preferred_page_url)),
+                containment_rules=containment_rules,
+                imported_domains=imported_domains,
+                source_mode=source_mode,
+                domain_suffixes=domain_suffixes,
             )
             self.save_settings(payload)
             self.worker = SearchWorker(config, self.history, self._emit)
@@ -255,8 +340,23 @@ class WebApi:
             return {"ok": False, "message": "当前没有可继续的查询任务。"}
         try:
             if payload is not None:
-                characters, blocks, binding = self._normalized_payload(payload)
-                self.worker.update_rules(characters, blocks, binding)
+                source_mode = str(payload.get("source_mode", "generator"))
+                if source_mode == "import":
+                    imported_domains = self._normalized_imported(payload)
+                    characters, blocks, binding, containment_rules = (), (), BIND_INDEPENDENT, ()
+                    domain_suffixes = normalize_domain_suffixes(payload.get("domain_suffixes", [".com"]))
+                else:
+                    characters, blocks, binding, containment_rules, domain_suffixes = self._normalized_payload(payload)
+                    imported_domains = ()
+                self.worker.update_rules(
+                    characters,
+                    blocks,
+                    binding,
+                    containment_rules,
+                    imported_domains,
+                    source_mode,
+                    domain_suffixes,
+                )
                 self.save_settings(payload)
             self.worker.resume()
             return {"ok": True}
@@ -303,6 +403,58 @@ class WebApi:
             if not str(path).lower().endswith(".xlsx"):
                 path = f"{path}.xlsx"
             return {"ok": True, "path": str(path)}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def import_domains(self, domain_suffixes: list[str] | None = None) -> dict:
+        try:
+            result = self.window.create_file_dialog(
+                webview.FileDialog.OPEN,
+                file_types=(
+                    "域名列表 (*.txt;*.csv;*.xlsx)",
+                    "文本文件 (*.txt)",
+                    "CSV 文件 (*.csv)",
+                    "Excel 工作簿 (*.xlsx)",
+                ),
+            )
+            if not result:
+                return {"ok": True, "path": "", "domains": []}
+            raw_path = result[0] if isinstance(result, (tuple, list)) else result
+            path = Path(raw_path).expanduser()
+            values: list[str] = []
+            if path.suffix.lower() == ".xlsx":
+                workbook = load_workbook(path, read_only=True, data_only=True)
+                try:
+                    for row in workbook.active.iter_rows(values_only=True):
+                        values.extend(str(cell).strip() for cell in row if cell is not None and str(cell).strip())
+                finally:
+                    workbook.close()
+            elif path.suffix.lower() in {".txt", ".csv"}:
+                text = path.read_text(encoding="utf-8-sig")
+                values = [item for item in re.split(r"[\s,;，；]+", text) if item]
+            else:
+                raise ValueError("请选择 .txt、.csv 或 .xlsx 文件。")
+            domains: list[str] = []
+            invalid: list[str] = []
+            header_names = {"domain", "domains", "域名", "word", "words", "单词"}
+            for index, value in enumerate(values):
+                if index == 0 and str(value).strip().lower() in header_names:
+                    invalid.append(value)
+                    continue
+                try:
+                    domains.extend(normalize_imported_domains((value,), domain_suffixes or [".com"]))
+                except PatternConfigurationError:
+                    invalid.append(value)
+            normalized = tuple(dict.fromkeys(domains))
+            if not normalized:
+                raise ValueError("导入文件中没有符合已选后缀池的域名或域名主体。")
+            return {
+                "ok": True,
+                "path": str(path),
+                "domains": list(normalized),
+                "count": len(normalized),
+                "skipped_count": len(invalid),
+            }
         except Exception as exc:
             return {"ok": False, "message": str(exc)}
 
@@ -369,6 +521,22 @@ class WebApi:
         subprocess.Popen(["open", str(target.parent)])
         return {"ok": True}
 
+    @staticmethod
+    def copy_text(value: str) -> dict:
+        try:
+            subprocess.run(["pbcopy"], input=str(value), text=True, check=True)
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    @staticmethod
+    def open_homepage() -> dict:
+        try:
+            subprocess.Popen(["open", HOMEPAGE_URL])
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
     def save_site(self, payload: dict) -> dict:
         name = str(payload.get("name", "")).strip()
         url = str(payload.get("url", "")).strip()
@@ -416,7 +584,7 @@ def run() -> None:
     api = WebApi()
     index = _resource_path("web_ui", "index.html")
     window = webview.create_window(
-        f"COM域名筛选器 v{__version__}",
+        f"全网域名筛选器 v{__version__}",
         url=index.as_uri(),
         js_api=api,
         width=1440,

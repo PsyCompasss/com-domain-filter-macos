@@ -10,13 +10,20 @@ from typing import Callable
 
 from .cloudflare import (
     STATUS_EXACT_AVAILABLE,
+    STATUS_NO_COM,
     CloudflareError,
     PageStructureChanged,
+    QueryResult,
     TransientPageError,
     VerificationRequired,
 )
 from .excel_store import ExcelStore, ExcelStoreError
-from .patterns import BIND_INDEPENDENT, BlockPatternGenerator, PatternGenerator
+from .patterns import (
+    BIND_INDEPENDENT,
+    BlockPatternGenerator,
+    ImportedDomainGenerator,
+    PatternGenerator,
+)
 from .storage import HistoryStore
 from .sites import create_checker
 
@@ -41,6 +48,10 @@ class RunConfig:
     blocks: tuple[dict, ...] = ()
     binding_mode: str = BIND_INDEPENDENT
     preferred_page_url: str = ""
+    containment_rules: tuple[dict, ...] = ()
+    imported_domains: tuple[str, ...] = ()
+    source_mode: str = "generator"
+    domain_suffixes: tuple[str, ...] = (".com",)
 
 
 class SearchWorker:
@@ -63,7 +74,9 @@ class SearchWorker:
         self.found = 0
         self.keep_browser_open_after_stop = True
         self._generation_lock = threading.Lock()
-        self._pending_generation: tuple[tuple[str, ...], tuple[dict, ...], str] | None = None
+        self._pending_generation: tuple[
+            tuple[str, ...], tuple[dict, ...], str, tuple[dict, ...], tuple[str, ...], str, tuple[str, ...]
+        ] | None = None
 
     @property
     def is_alive(self) -> bool:
@@ -88,11 +101,26 @@ class SearchWorker:
         characters: tuple[str, ...],
         blocks: tuple[dict, ...],
         binding_mode: str,
+        containment_rules: tuple[dict, ...] = (),
+        imported_domains: tuple[str, ...] = (),
+        source_mode: str = "generator",
+        domain_suffixes: tuple[str, ...] = (".com",),
     ) -> None:
         # 先构造一次，确保错误规则不会在后台线程里才爆出。
-        BlockPatternGenerator(characters, blocks, binding_mode)
+        if source_mode == "import":
+            ImportedDomainGenerator(imported_domains, domain_suffixes)
+        else:
+            BlockPatternGenerator(characters, blocks, binding_mode, containment_rules, domain_suffixes)
         with self._generation_lock:
-            self._pending_generation = (characters, blocks, binding_mode)
+            self._pending_generation = (
+                characters,
+                blocks,
+                binding_mode,
+                containment_rules,
+                imported_domains,
+                source_mode,
+                domain_suffixes,
+            )
 
     def _take_pending_generation(self):
         with self._generation_lock:
@@ -100,8 +128,12 @@ class SearchWorker:
             self._pending_generation = None
         if pending is None:
             return None
-        characters, blocks, binding_mode = pending
-        return BlockPatternGenerator(characters, blocks, binding_mode), "", ""
+        characters, blocks, binding_mode, containment_rules, imported_domains, source_mode, domain_suffixes = pending
+        if source_mode == "import":
+            return ImportedDomainGenerator(imported_domains, domain_suffixes), "", ""
+        return BlockPatternGenerator(
+            characters, blocks, binding_mode, containment_rules, domain_suffixes
+        ), "", ""
 
     def stop(self, keep_browser_open: bool = True) -> None:
         # 停止查询不等于关闭 Chrome。保留参数仅为兼容旧调用方。
@@ -123,20 +155,48 @@ class SearchWorker:
         self.emit("finished", {"message": message, "checked": self.checked, "found": self.found})
 
     def _next_untested(self, generator):
-        for _ in range(2000):
-            item = generator.generate()
-            if not self.history.has_tested(item.domain):
-                return item
+        attempts = 0
+        while attempts < 2000 or isinstance(generator, ImportedDomainGenerator):
+            try:
+                item = generator.generate()
+            except StopIteration:
+                return None
+            attempts += 1
+            pending_domains = tuple(
+                domain for domain in item.query_domains if not self.history.has_tested(domain)
+            )
+            if pending_domains:
+                return item, pending_domains
         return None
+
+    @staticmethod
+    def _suffixes_for(stem: str, domains: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(domain[len(stem):] for domain in domains)
+
+    @staticmethod
+    def _query_group(checker, item, domains: tuple[str, ...]) -> dict[str, QueryResult]:
+        suffixes = SearchWorker._suffixes_for(item.query_stem, domains)
+        group_query = getattr(checker, "query_group", None)
+        if callable(group_query):
+            return group_query(item.query_stem, suffixes)
+        # 兼容第三方查询器和旧测试替身；当前内置的 Cloudflare、万网均走
+        # ``query_group``，不会为每个后缀重复提交搜索。
+        return {domain: checker.query(domain) for domain in domains}
 
     def _run(self) -> None:
         checker = None
         try:
-            if self.config.blocks:
+            if self.config.source_mode == "import":
+                generator = ImportedDomainGenerator(self.config.imported_domains, self.config.domain_suffixes)
+                metadata_prefix = ""
+                metadata_suffix = ""
+            elif self.config.blocks:
                 generator = BlockPatternGenerator(
                     self.config.characters,
                     self.config.blocks,
                     self.config.binding_mode,
+                    self.config.containment_rules,
+                    self.config.domain_suffixes,
                 )
                 metadata_prefix = ""
                 metadata_suffix = ""
@@ -212,53 +272,69 @@ class SearchWorker:
                 if reason:
                     self.emit("finished", {"message": reason, "checked": self.checked, "found": self.found})
                     return
-                item = self._next_untested(generator)
-                if item is None:
+                next_item = self._next_untested(generator)
+                if next_item is None:
                     self.emit(
                         "finished",
                         {"message": "连续生成的域名都已检测过，当前组合可能已经用尽。", "checked": self.checked, "found": self.found},
                     )
                     return
+                item, pending_domains = next_item
 
                 # 必须在网页查询前写入去重数据库。否则用户在查询返回前后点击停止，
                 # 或软件意外退出时，这个已经发给网站的域名会在下次运行时再次出现。
                 started_at = datetime.now().astimezone().isoformat(timespec="seconds")
-                if not self.history.reserve(
-                    item.domain,
-                    started_at,
-                    item.pattern,
-                    metadata_prefix,
-                    metadata_suffix,
-                    site=self.config.site_url,
-                ):
+                reserved_domains = tuple(
+                    domain
+                    for domain in pending_domains
+                    if self.history.reserve(
+                        domain,
+                        started_at,
+                        item.pattern,
+                        metadata_prefix,
+                        metadata_suffix,
+                        site=self.config.site_url,
+                    )
+                )
+                if not reserved_domains:
                     continue
 
-                result = None
+                results = None
                 skipped_after_failures = False
                 while not self.stop_event.is_set():
                     try:
-                        self.emit("current", {"domain": item.domain, "pattern": item.pattern})
-                        result = checker.query(item.domain)
+                        suffix_text = " / ".join(self._suffixes_for(item.query_stem, reserved_domains))
+                        self.emit(
+                            "current",
+                            {
+                                "domain": item.query_stem,
+                                "domains": list(reserved_domains),
+                                "suffixes": suffix_text,
+                                "pattern": item.pattern,
+                            },
+                        )
+                        results = self._query_group(checker, item, reserved_domains)
                         consecutive_page_failures = 0
                         break
                     except TransientPageError as exc:
                         consecutive_page_failures += 1
                         if consecutive_page_failures >= 3:
                             failed_at = datetime.now().astimezone().isoformat(timespec="seconds")
-                            self.history.finalize(
-                                item.domain,
-                                "query_failed",
-                                failed_at,
-                                item.pattern,
-                                metadata_prefix,
-                                metadata_suffix,
-                                str(exc),
-                                self.config.site_url,
-                            )
+                            for domain in reserved_domains:
+                                self.history.finalize(
+                                    domain,
+                                    "query_failed",
+                                    failed_at,
+                                    item.pattern,
+                                    metadata_prefix,
+                                    metadata_suffix,
+                                    str(exc),
+                                    self.config.site_url,
+                                )
                             self.checked += 1
                             self.emit(
                                 "status",
-                                {"message": f"{item.domain} 连续3次未能确认查询结果，已记录失败并已跳过，继续下一个"},
+                                {"message": f"{item.query_stem} 连续3次未能确认查询结果，已记录失败并已跳过，继续下一个"},
                             )
                             self.emit(
                                 "progress",
@@ -305,37 +381,53 @@ class SearchWorker:
                     if self.stop_event.wait(self.config.interval_seconds):
                         break
                     continue
-                if result is None:
+                if results is None:
                     break
                 checked_at = datetime.now().astimezone().isoformat(timespec="seconds")
-                if result.status == STATUS_EXACT_AVAILABLE:
-                    excel.append_if_new(
-                        item.domain,
+                last_status = STATUS_NO_COM
+                for domain in reserved_domains:
+                    result = results.get(domain) or QueryResult(
+                        domain,
+                        STATUS_NO_COM,
+                        "",
+                        False,
+                        False,
+                        "查询页面没有返回该后缀结果",
+                    )
+                    last_status = result.status
+                    if result.status == STATUS_EXACT_AVAILABLE:
+                        excel.append_if_new(
+                            domain,
+                            checked_at,
+                            item.pattern,
+                            metadata_prefix,
+                            metadata_suffix,
+                            self.config.site_url,
+                        )
+                        self.found += 1
+                        self.emit(
+                            "found",
+                            {"domain": domain, "pattern": item.pattern, "checked_at": checked_at, "found": self.found},
+                        )
+                    detail = {
+                        "returned_name": result.returned_name,
+                        "detail": result.detail,
+                        "query_stem": item.query_stem,
+                    }
+                    self.history.finalize(
+                        domain,
+                        result.status,
                         checked_at,
                         item.pattern,
                         metadata_prefix,
                         metadata_suffix,
+                        json.dumps(detail, ensure_ascii=False),
                         self.config.site_url,
                     )
-                    self.found += 1
-                    self.emit(
-                        "found",
-                        {"domain": item.domain, "pattern": item.pattern, "checked_at": checked_at, "found": self.found},
-                    )
-                self.history.finalize(
-                    item.domain,
-                    result.status,
-                    checked_at,
-                    item.pattern,
-                    metadata_prefix,
-                    metadata_suffix,
-                    json.dumps({"returned_name": result.returned_name}, ensure_ascii=False),
-                    self.config.site_url,
-                )
                 self.checked += 1
                 self.emit(
                     "progress",
-                    {"checked": self.checked, "found": self.found, "last_status": result.status},
+                    {"checked": self.checked, "found": self.found, "last_status": last_status},
                 )
                 if self.stop_event.is_set():
                     break

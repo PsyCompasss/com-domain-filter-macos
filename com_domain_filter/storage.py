@@ -8,7 +8,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .tlds import ascii_domain, unicode_domain
 
+
+# 软件更名后继续使用原数据目录，避免现有历史记录、设置和 Chrome 会话丢失。
 APP_DIR_NAME = "COM域名筛选器"
 
 
@@ -51,10 +54,17 @@ class HistoryStore:
             if "site" not in columns:
                 connection.execute("ALTER TABLE tested_domains ADD COLUMN site TEXT NOT NULL DEFAULT ''")
 
+    @staticmethod
+    def _domain_variants(domain: str) -> tuple[str, ...]:
+        """兼容旧版保存的 Punycode，同时让界面和新记录统一使用可读域名。"""
+        return tuple(dict.fromkeys((unicode_domain(domain), ascii_domain(domain))))
+
     def has_tested(self, domain: str) -> bool:
+        variants = self._domain_variants(domain)
+        placeholders = ",".join("?" for _ in variants)
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT 1 FROM tested_domains WHERE domain = ? LIMIT 1", (domain.lower(),)
+                f"SELECT 1 FROM tested_domains WHERE domain IN ({placeholders}) LIMIT 1", variants
             ).fetchone()
         return row is not None
 
@@ -69,14 +79,21 @@ class HistoryStore:
         detail: str = "",
         site: str = "",
     ) -> bool:
+        normalized = unicode_domain(domain)
+        variants = self._domain_variants(domain)
+        placeholders = ",".join("?" for _ in variants)
         with self._connect() as connection:
+            if connection.execute(
+                f"SELECT 1 FROM tested_domains WHERE domain IN ({placeholders}) LIMIT 1", variants
+            ).fetchone():
+                return False
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO tested_domains
                     (domain, status, checked_at, pattern, prefix, suffix, detail, site)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (domain.lower(), status, checked_at, pattern, prefix, suffix, detail, site),
+                (normalized, status, checked_at, pattern, prefix, suffix, detail, site),
             )
         return cursor.rowcount == 1
 
@@ -113,20 +130,22 @@ class HistoryStore:
         site: str = "",
     ) -> bool:
         """把已占位的查询更新为最终结果。"""
+        variants = self._domain_variants(domain)
+        placeholders = ",".join("?" for _ in variants)
         with self._connect() as connection:
             cursor = connection.execute(
-                """
+                f"""
                 UPDATE tested_domains
                 SET status = ?, checked_at = ?, pattern = ?, prefix = ?, suffix = ?, detail = ?, site = ?
-                WHERE domain = ?
+                WHERE domain IN ({placeholders})
                 """,
-                (status, checked_at, pattern, prefix, suffix, detail, site, domain.lower()),
+                (status, checked_at, pattern, prefix, suffix, detail, site, *variants),
             )
         return cursor.rowcount == 1
 
     def found_rows(self) -> list[tuple[str, str, str, str, str, str]]:
         with self._connect() as connection:
-            return connection.execute(
+            rows = connection.execute(
                 """
                 SELECT domain, checked_at, pattern, prefix, suffix, site
                 FROM tested_domains
@@ -134,6 +153,7 @@ class HistoryStore:
                 ORDER BY checked_at, domain
                 """
             ).fetchall()
+        return [(unicode_domain(row[0]), *row[1:]) for row in rows]
 
     def total_count(self) -> int:
         with self._connect() as connection:
@@ -142,16 +162,24 @@ class HistoryStore:
     def history_rows(self) -> list[tuple[str, str, str, str, str, str, str, str]]:
         """返回全部已查询记录，最新记录排在最前。"""
         with self._connect() as connection:
-            return connection.execute(
+            rows = connection.execute(
                 """
                 SELECT domain, status, checked_at, pattern, prefix, suffix, detail, site
                 FROM tested_domains
                 ORDER BY checked_at DESC, domain
                 """
             ).fetchall()
+        return [(unicode_domain(row[0]), *row[1:]) for row in rows]
 
     def delete_domains(self, domains: list[str] | tuple[str, ...]) -> int:
-        normalized = tuple(dict.fromkeys(str(item).strip().lower() for item in domains if str(item).strip()))
+        normalized = tuple(
+            dict.fromkeys(
+                variant
+                for item in domains
+                if str(item).strip()
+                for variant in self._domain_variants(str(item))
+            )
+        )
         if not normalized:
             return 0
         placeholders = ",".join("?" for _ in normalized)

@@ -1,3 +1,3 @@
-"""COM domain filtering desktop application."""
+"""全网域名筛选器桌面应用。"""
 
-__version__ = "1.5.2"
+__version__ = "1.8.3"

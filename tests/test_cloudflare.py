@@ -221,6 +221,48 @@ class CloudflareClassificationTests(unittest.TestCase):
         }
         self.assertEqual(classify_response("abc.com", payload).status, STATUS_NO_COM)
 
+    def test_requested_net_suffix_is_classified_independently(self):
+        payload = {
+            "check_result": {"name": "abc.net", "available": True, "can_register": True},
+            "domains": [{"name": "abc.com", "availability": "registered"}],
+        }
+        self.assertEqual(classify_response("abc.net", payload).status, STATUS_EXACT_AVAILABLE)
+
+    def test_readable_idn_query_matches_punycode_api_result(self):
+        payload = {
+            "check_result": {"name": "abc.xn--fiqs8s", "available": True, "can_register": True},
+            "domains": [],
+        }
+        result = classify_response("abc.中国", payload)
+        self.assertEqual(result.status, STATUS_EXACT_AVAILABLE)
+        self.assertEqual(result.query, "abc.中国")
+        self.assertEqual(result.returned_name, "abc.中国")
+
+    def test_old_punycode_query_is_returned_in_readable_form(self):
+        payload = {
+            "check_result": {"name": "abc.中国", "available": False, "can_register": False},
+            "domains": [],
+        }
+        result = classify_response("abc.xn--fiqs8s", payload)
+        self.assertEqual(result.status, STATUS_EXACT_UNAVAILABLE)
+        self.assertEqual(result.query, "abc.中国")
+
+    def test_group_query_submits_stem_once_and_classifies_each_selected_suffix(self):
+        payload = {
+            "domains": [
+                {"name": "abc.com", "availability": "available"},
+                {"name": "abc.net", "availability": "registered"},
+            ]
+        }
+        checker = CloudflareChecker("https://domains.cloudflare.com/", "/tmp/test-profile")
+        with patch.object(checker, "_query_payload", return_value=payload) as query_payload:
+            results = checker.query_group("abc", (".com", ".net", ".cc"))
+
+        query_payload.assert_called_once_with("abc")
+        self.assertEqual(results["abc.com"].status, STATUS_EXACT_AVAILABLE)
+        self.assertEqual(results["abc.net"].status, STATUS_EXACT_UNAVAILABLE)
+        self.assertEqual(results["abc.cc"].status, STATUS_NO_COM)
+
 
 if __name__ == "__main__":
     unittest.main()

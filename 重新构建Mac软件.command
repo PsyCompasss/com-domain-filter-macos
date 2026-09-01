@@ -8,6 +8,6 @@ if [[ ! -x ".venv/bin/python" ]]; then
 fi
 .venv/bin/python -m pip install -r requirements.txt pyinstaller==6.15.0
 .venv/bin/pyinstaller --noconfirm --clean "COM域名筛选器.spec"
-APP_PATH="$SCRIPT_DIR/dist/COM域名筛选器.app"
+APP_PATH="$SCRIPT_DIR/dist/全网域名筛选器.app"
 codesign --force --deep --sign - "$APP_PATH"
-echo "构建完成：$SCRIPT_DIR/dist/COM域名筛选器.app"
+echo "构建完成：$SCRIPT_DIR/dist/全网域名筛选器.app"

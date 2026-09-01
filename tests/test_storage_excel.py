@@ -25,6 +25,26 @@ class StorageAndExcelTests(unittest.TestCase):
             self.assertTrue(store.has_tested("ABC.COM"))
             self.assertEqual(store.total_count(), 1)
 
+    def test_idn_history_treats_readable_and_punycode_domains_as_the_same_record(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = HistoryStore(Path(temp) / "state.db")
+            args = ("abc.中国", "exact_available", "2026-08-21T12:00:00+08:00", "不限", "", "", "")
+            self.assertTrue(store.record(*args))
+            self.assertFalse(store.record("abc.xn--fiqs8s", *args[1:]))
+            self.assertTrue(store.has_tested("abc.xn--fiqs8s"))
+            self.assertEqual(store.history_rows()[0][0], "abc.中国")
+            self.assertEqual(store.delete_domains(["abc.xn--fiqs8s"]), 1)
+
+    def test_excel_saves_readable_idn_and_deduplicates_punycode(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "results.xlsx"
+            store = ExcelStore(path)
+            rest = ("2026-08-21T12:00:00+08:00", "不限", "", "", "万网")
+            self.assertTrue(store.append_if_new("abc.xn--fiqs8s", *rest))
+            self.assertFalse(store.append_if_new("abc.中国", *rest))
+            sheet = load_workbook(path)[SHEET_NAME]
+            self.assertEqual(sheet["A2"].value, "abc.中国")
+
     def test_query_is_reserved_before_result_and_then_finalized(self):
         with tempfile.TemporaryDirectory() as temp:
             store = HistoryStore(Path(temp) / "state.db")

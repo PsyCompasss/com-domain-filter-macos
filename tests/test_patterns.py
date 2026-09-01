@@ -9,9 +9,13 @@ from com_domain_filter.patterns import (
     BLOCK_FIXED,
     BLOCK_UNLIMITED,
     BlockPatternGenerator,
+    ContainmentRule,
+    ImportedDomainGenerator,
     PatternBlock,
     PatternConfigurationError,
     PatternGenerator,
+    normalize_imported_domains,
+    normalize_domain_suffixes,
 )
 
 
@@ -111,6 +115,124 @@ class PatternGeneratorTests(unittest.TestCase):
             rng=random.Random(3),
         )
         self.assertEqual(len(generator.generate().domain[:-4]), 8)
+
+    def test_at_least_contains_two_eights(self):
+        generator = BlockPatternGenerator(
+            "abc8",
+            (PatternBlock(BLOCK_UNLIMITED, length=6),),
+            containment_rules=(ContainmentRule("8", 2),),
+            rng=random.Random(11),
+        )
+        for _ in range(30):
+            self.assertGreaterEqual(generator.generate().domain[:-4].count("8"), 2)
+
+    def test_at_least_contains_requires_character_in_pool(self):
+        with self.assertRaises(PatternConfigurationError):
+            BlockPatternGenerator(
+                "abc",
+                (PatternBlock(BLOCK_UNLIMITED, length=4),),
+                containment_rules=(ContainmentRule("8", 2),),
+            )
+
+    def test_custom_pattern_can_move_as_one_piece(self):
+        generator = BlockPatternGenerator(
+            "abc123",
+            (
+                PatternBlock(BLOCK_UNLIMITED, length=2),
+                PatternBlock(BLOCK_CUSTOM, "AA", random_position=True),
+            ),
+            rng=random.Random(19),
+        )
+        positions = set()
+        for _ in range(80):
+            label = generator.generate().domain[:-4]
+            repeated = next(index for index in range(3) if label[index] == label[index + 1])
+            positions.add(repeated)
+        self.assertEqual(positions, {0, 1, 2})
+
+    def test_fixed_and_common_blocks_can_move_as_one_piece(self):
+        generator = BlockPatternGenerator(
+            "abcdef123",
+            (
+                PatternBlock(BLOCK_UNLIMITED, length=2),
+                PatternBlock(BLOCK_FIXED, "88", random_position=True),
+                PatternBlock(BLOCK_COMMON, "AAA", random_position=True),
+            ),
+            rng=random.Random(23),
+        )
+        for _ in range(30):
+            label = generator.generate().domain.split(".", 1)[0]
+            self.assertIn("88", label)
+            self.assertTrue(any(label[index] == label[index + 1] == label[index + 2] for index in range(len(label) - 2)))
+
+    def test_selected_domain_suffixes_are_grouped_under_one_generated_stem(self):
+        generator = BlockPatternGenerator(
+            "ab",
+            (PatternBlock(BLOCK_UNLIMITED, length=2),),
+            domain_suffixes=(".com", ".net", ".cn", ".io"),
+            rng=random.Random(7),
+        )
+        item = generator.generate()
+        self.assertEqual(item.domain, f"{item.query_stem}.com")
+        self.assertEqual(
+            item.query_domains,
+            tuple(f"{item.query_stem}{suffix}" for suffix in (".com", ".net", ".cn", ".io")),
+        )
+        # 组合数按主体计数，选择更多后缀不会重复生成同一个主体。
+        self.assertEqual(generator.estimated_space(), 4)
+
+    def test_readable_idn_suffix_is_accepted_and_old_punycode_setting_is_migrated(self):
+        self.assertEqual(normalize_domain_suffixes((".中国",)), (".中国",))
+        self.assertEqual(normalize_domain_suffixes((".xn--fiqs8s",)), (".中国",))
+
+    def test_imported_idn_domains_are_saved_in_readable_form(self):
+        self.assertEqual(
+            normalize_imported_domains(("abc.中国", "abc.xn--fiqs8s"), (".中国",)),
+            ("abc.中国",),
+        )
+
+    def test_imported_domains_are_normalized_deduplicated_and_sequential(self):
+        domains = normalize_imported_domains(("Alpha", "beta.com", "https://alpha.com/path"))
+        self.assertEqual(domains, ("alpha.com", "beta.com"))
+        generator = ImportedDomainGenerator(domains)
+        self.assertEqual(generator.generate().domain, "alpha.com")
+        self.assertEqual(generator.generate().domain, "beta.com")
+        with self.assertRaises(StopIteration):
+            generator.generate()
+
+    def test_import_rejects_non_com_suffix(self):
+        with self.assertRaises(PatternConfigurationError):
+            normalize_imported_domains(("example.net",))
+
+    def test_import_expands_bare_names_across_selected_suffixes(self):
+        domains = normalize_imported_domains(
+            ("Alpha", "beta.net", "https://alpha.com/path"),
+            (".com", ".net"),
+        )
+        self.assertEqual(domains, ("alpha.com", "alpha.net", "beta.net"))
+
+    def test_imported_suffixes_are_grouped_by_stem_for_one_page_query(self):
+        generator = ImportedDomainGenerator(
+            ("alpha.com", "alpha.net", "alpha.cc", "beta.net"),
+            (".com", ".net", ".cc"),
+        )
+        first = generator.generate()
+        second = generator.generate()
+        self.assertEqual(first.query_stem, "alpha")
+        self.assertEqual(first.query_domains, ("alpha.com", "alpha.net", "alpha.cc"))
+        self.assertEqual(second.query_stem, "beta")
+        self.assertEqual(second.query_domains, ("beta.com", "beta.net", "beta.cc"))
+        self.assertEqual(generator.estimated_space(), 2)
+
+    def test_imported_com_list_uses_every_selected_suffix(self):
+        generator = ImportedDomainGenerator(
+            ("betel.com", "betas.com"),
+            (".com", ".net", ".cc"),
+        )
+        first = generator.generate()
+        second = generator.generate()
+        self.assertEqual(first.query_domains, ("betel.com", "betel.net", "betel.cc"))
+        self.assertEqual(second.query_domains, ("betas.com", "betas.net", "betas.cc"))
 
 
 if __name__ == "__main__":

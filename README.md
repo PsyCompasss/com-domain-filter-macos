@@ -1,18 +1,18 @@
 <div align="center">
 
-<img src="assets/app-icon-b-v2.png" width="128" alt="COM Domain Filter icon">
+<img src="assets/app-icon-b-v2.png" width="128" alt="Universal Domain Filter icon">
 
-# COM 域名筛选器 · COM Domain Filter
+# 全网域名筛选器 · Universal Domain Filter
 
-### 在真实注册商页面自动组合、查询并整理可注册的 `.com` 域名
-### Generate, verify, and organize available `.com` domains on real registrar pages
+### 在真实注册商页面自动组合、查询并整理所选后缀的可注册域名
+### Generate, verify, and organize available domains across selected TLDs on real registrar pages
 
 <p>
-  <img src="https://img.shields.io/badge/version-v1.5.2-1769ff?style=flat-square" alt="Version v1.5.2">
+  <img src="https://img.shields.io/badge/version-v1.8.3-1769ff?style=flat-square" alt="Version v1.8.3">
   <img src="https://img.shields.io/badge/platform-macOS-111111?style=flat-square&logo=apple" alt="macOS">
   <img src="https://img.shields.io/badge/chip-Apple%20Silicon-555555?style=flat-square" alt="Apple Silicon">
   <img src="https://img.shields.io/badge/Python-3.12-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.12">
-  <img src="https://img.shields.io/badge/TLD-.com-12a150?style=flat-square" alt=".com only">
+  <img src="https://img.shields.io/badge/TLD-multi--TLD-12a150?style=flat-square" alt="Multi-TLD">
 </p>
 
 <p>
@@ -31,9 +31,9 @@
 
 ## 软件简介 · Overview
 
-COM 域名筛选器是一款面向 macOS 的域名组合与查询工具。你可以自由选择字符、搭建规律、设置查询速度和停止条件。软件会通过 Cloudflare Registrar 或阿里云万网页面逐个核对结果，只把“名称完全一致、页面明确显示可注册”的 `.com` 域名写入 Excel。
+全网域名筛选器是一款面向 macOS 的域名组合与查询工具。你可以选择后缀和字符、搭建规律或导入域名列表，并设置查询速度和停止条件。软件会通过 Cloudflare Registrar 或阿里云万网页面核对结果，只把“完整域名一致、页面明确显示可注册”的所选后缀写入 Excel。
 
-COM Domain Filter is a macOS utility for generating and checking domain-name combinations. Choose your character pool, build reusable patterns, control the query pace, and set automatic stop conditions. The app checks each candidate on Cloudflare Registrar or Alibaba Cloud Wanwang and saves only exact-match `.com` domains that the registrar explicitly marks as available.
+Universal Domain Filter is a macOS utility for generating and checking domain-name combinations. Choose TLDs and characters, build reusable patterns or import a domain list, control the query pace, and set automatic stop conditions. The app checks candidates on Cloudflare Registrar or Alibaba Cloud Wanwang and saves only exact full domains that the registrar explicitly marks as available.
 
 > 软件不会购买或注册域名，也不会破解验证码。最终注册前，请在注册商页面再次确认价格和状态。
 >
@@ -44,9 +44,13 @@ COM Domain Filter is a macOS utility for generating and checking domain-name com
 | | 中文 | English |
 |:--:|---|---|
 | 🧩 | **积木式域名组合**：固定文字、常用规律、自定义规律和不限随机可以任意添加、排序、复制和删除 | **Block-based builder:** Add, reorder, duplicate, or remove fixed text, presets, custom patterns, and unrestricted random blocks |
+| 🌍 | **后缀池**：可从常用、其他公开、国家/地区、国际化和完整 IANA 分类中选择一个或多个后缀 | **TLD pool:** Select one or more suffixes from common, public, country/region, internationalized, or full IANA groups |
 | 🔤 | **自定义字符池**：自由选择 26 个字母、10 个数字和半角连字符 `-` | **Custom character pool:** Select any combination of 26 letters, 10 digits, and the ASCII hyphen `-` |
+| 📥 | **导入域名列表**：支持 TXT、CSV 和 Excel，可按导入顺序查询 | **Domain import:** Load TXT, CSV, or Excel lists and query them in their original order |
+| 📌 | **至少包含**：限制生成结果至少出现指定字符及次数 | **Required characters:** Require a character to appear at least a specified number of times |
+| 🎲 | **随机插入**：固定文字、常用规律和自定义规律可随机出现在名称的前、中或后部 | **Random insertion:** Place fixed text, presets, and custom patterns at random positions within the name |
 | 🧬 | **灵活的占位符关系**：不同规律块可以独立随机，也可以让 `A、B、C` 在多个规律块之间共用字符 | **Flexible placeholder binding:** Generate each pattern independently or share `A`, `B`, and `C` across multiple blocks |
-| 🎯 | **严格核对 `.com`**：只有完整域名一致、注册状态明确时才进入下一条 | **Strict `.com` verification:** Continue only after the exact domain and its registration state are confirmed |
+| 🎯 | **分组核对多个后缀**：每次提交一个名称，并对页面中所选后缀的完整域名逐一确认 | **Grouped multi-TLD verification:** Submit one name and confirm each selected full-domain result shown on the page |
 | 🌐 | **多网站适配**：支持 Cloudflare Registrar 和阿里云万网 | **Multiple registrars:** Supports Cloudflare Registrar and Alibaba Cloud Wanwang |
 | 🔄 | **自动恢复**：页面空白、结果延迟或临时加载失败时自动刷新当前查询 | **Automatic recovery:** Refreshes and retries the current query after blank pages, delayed results, or temporary failures |
 | ⏯️ | **可暂停修改规则**：暂停期间修改组合，继续后从下一条域名采用新规则 | **Edit while paused:** Updated rules take effect from the next domain after resuming |
@@ -58,12 +62,12 @@ COM Domain Filter is a macOS utility for generating and checking domain-name com
 
 ### 生成规则 · Rule Builder
 
-选择字符池，用组合块搭建域名结构，并实时预览结果与长度。
+选择后缀池和字符池，用组合块搭建域名结构，或切换到导入模式，并实时预览结果与长度。
 
-Select a character pool, assemble pattern blocks, and preview the generated structure and length in real time.
+Choose TLDs and characters, assemble pattern blocks or switch to import mode, and preview the generated structure and length in real time.
 
 <p align="center">
-  <img src="docs/images/ui-rules-v1.4.0.png" width="100%" alt="Rule builder interface">
+  <img src="screenshots/v1.7.0/01-生成规则.png" width="100%" alt="Rule builder interface">
 </p>
 
 <table>
@@ -72,11 +76,11 @@ Select a character pool, assemble pattern blocks, and preview the generated stru
     <td width="50%" align="center"><strong>查询结果 · Available Results</strong></td>
   </tr>
   <tr>
-    <td><img src="docs/images/ui-run-v1.4.0.png" alt="Run settings interface"></td>
-    <td><img src="docs/images/ui-results-v1.4.0.png" alt="Available results interface"></td>
+    <td><img src="screenshots/v1.7.0/02-运行设置.png" alt="Run settings interface"></td>
+    <td><img src="screenshots/v1.7.0/03-可注册结果.png" alt="Available results interface"></td>
   </tr>
   <tr>
-    <td>连接查询网站，设置查询速度、刷新间隔、停止条件和 Excel 路径。<br><br>Connect a registrar and configure query speed, refresh delay, stop conditions, and Excel output.</td>
+    <td>连接查询网站，选择随机生成或导入来源，并设置查询速度、刷新间隔和停止条件。<br><br>Connect a registrar, choose generated or imported domains, and configure query speed, refresh delay, and stop conditions.</td>
     <td>查看已确认可注册的域名，并直接打开结果文件。<br><br>Review confirmed available domains and open the result workbook directly.</td>
   </tr>
 </table>
@@ -84,19 +88,19 @@ Select a character pool, assemble pattern blocks, and preview the generated stru
 ## 工作流程 · How It Works
 
 ```text
-选择字符与规律             连接软件专用 Chrome
-Choose characters/rules  → Connect the dedicated Chrome window
+选择后缀、生成规则或导入列表       连接软件专用 Chrome
+Choose TLDs, rules, or a list  → Connect the dedicated Chrome window
                                       ↓
-保存精确可注册结果         在注册商页面逐条确认 .com
-Save exact available     ← Verify each .com on the registrar page
+保存精确可注册结果         在注册商页面确认所选后缀
+Save exact available     ← Verify selected TLDs on the registrar page
 ```
 
-1. 软件根据字符池和组合块生成候选名称。
-   The app generates candidate names from your selected characters and blocks.
+1. 软件根据字符池和组合块生成候选名称，或按导入列表顺序读取名称。
+   The app generates candidate names from your selected characters and blocks, or reads names from an imported list in order.
 2. 查询时只提交名称部分，例如搜索 `abc`，而不是 `abc.com`。
    Only the name is submitted—for example, `abc`, not `abc.com`.
-3. 软件等待页面出现名称完全一致的 `.com` 条目，并确认其状态。
-   The app waits for the exact `.com` entry and confirms its registration status.
+3. 软件等待页面稳定，再查找所选后缀对应的完整域名并分别确认状态；页面缺少某个后缀时会明确记录为“未找到该后缀结果”。
+   The app waits for a stable page, then confirms each selected full-domain result. A missing suffix is recorded as “result not found” rather than guessed as available or registered.
 4. 只有明确显示可注册的结果才写入可注册结果 Excel；所有查询状态均可在历史页查看。
    Only explicitly available domains are saved to the availability workbook; every query status remains visible in history.
 
@@ -140,9 +144,9 @@ The current build is available for Apple Silicon only.
 
 ### 2. 打开软件 · Open the App
 
-解压 ZIP 后打开 `COM域名筛选器.app`。如果 macOS 首次启动时拦截应用，请在 Finder 中右键点击软件并选择“打开”。
+解压 ZIP 后打开 `全网域名筛选器.app`。如果 macOS 首次启动时拦截应用，请在 Finder 中右键点击软件并选择“打开”。
 
-Extract the ZIP and open `COM域名筛选器.app`. If macOS blocks the first launch, right-click the app in Finder and choose **Open**.
+Extract the ZIP and open `全网域名筛选器.app`. If macOS blocks the first launch, right-click the app in Finder and choose **Open**.
 
 > 当前安装包采用本地临时签名，尚未进行 Apple Developer ID 公证，因此首次打开时可能出现安全确认。
 >
@@ -175,8 +179,8 @@ Choose a registrar under **Run Settings**, click **Open / Connect Chrome**, and 
 
 ## 结果与状态 · Results & Statuses
 
-- 可注册结果 Excel 只记录名称完全一致且可注册的 `.com`。
-  The availability workbook contains only exact-match `.com` domains confirmed as available.
+- 可注册结果 Excel 只记录完整域名一致、且页面明确显示可注册的所选后缀。
+  The availability workbook contains only exact full domains from the selected TLDs that are explicitly confirmed as available.
 - “已查询记录”页面保留可注册、已注册、未确认和查询失败等状态。
   The history page retains available, registered, unconfirmed, and failed statuses.
 - 删除历史记录后，对应域名可以重新查询；删除历史不会删除已有的可注册结果 Excel。
@@ -209,19 +213,19 @@ Other websites can be saved in the interface, but each one still requires a dedi
 ## 常见问题 · FAQ
 
 <details>
-<summary><strong>为什么只记录 `.com`？ · Why are only `.com` domains saved?</strong></summary>
+<summary><strong>为什么某个已选后缀没有结果？ · Why is a selected TLD missing?</strong></summary>
 <br>
-这是本项目的明确范围。即使页面同时显示其他后缀，软件也只判断并保存名称完全一致的 `.com`。
+部分注册商会把小众后缀放在瀑布流下方，或根本不返回该后缀。软件会在页面稳定后分段滚动查找；仍未出现时记录“未找到该后缀结果”，不会擅自判定为可注册或已注册。
 <br><br>
-This project is intentionally scoped to `.com`. Other extensions may appear on the page, but only the exact `.com` result is evaluated and saved.
+Some registrars place less common TLDs lower in a lazy-loaded result list or omit them entirely. The app performs bounded scrolling after the page stabilizes; if a suffix still does not appear, it records “result not found” instead of guessing its status.
 </details>
 
 <details>
 <summary><strong>为什么有些域名显示“查询失败”？ · Why is a domain marked as “Query failed”?</strong></summary>
 <br>
-通常表示网站在多次重试后仍未给出可确认的精确 `.com` 状态，或页面临时加载异常。可以在“已查询记录”中删除该条记录后重新查询。
+通常表示网站在多次重试后仍未给出可确认的精确域名状态，或页面临时加载异常。可以在“已查询记录”中删除该条记录后重新查询。
 <br><br>
-This usually means the registrar did not provide a confirmable exact `.com` status after multiple retries, or the page failed temporarily. Delete the record from Query History to check it again.
+This usually means the registrar did not provide a confirmable exact-domain status after multiple retries, or the page failed temporarily. Delete the record from Query History to check it again.
 </details>
 
 <details>
@@ -264,12 +268,13 @@ python3.12 -m venv .venv
 安装依赖后双击 `重新构建Mac软件.command`。
 After installing the dependencies, double-click `重新构建Mac软件.command`.
 
-构建脚本会生成 `.app` 和 ZIP。正式分发前仍需根据发布渠道完成 Developer ID 签名、公证和渠道要求的审核。
+构建脚本会生成并临时签名 `.app`；GitHub Release 中另行提供 ZIP。正式分发前仍需根据发布渠道完成 Developer ID 签名、公证和渠道要求的审核。
 
-The build script produces an `.app` bundle and a ZIP archive. Public distribution may still require Developer ID signing, notarization, and channel-specific review.
+The build script produces and ad-hoc signs the `.app`; GitHub Releases provide the ZIP package. Public distribution may still require Developer ID signing, notarization, and channel-specific review.
 
 ## 版本记录 · Changelog
 
+- [v1.8.3 release notes](docs/releases/v1.8.3.md)
 - [v1.5.2 release notes](docs/releases/v1.5.2.md)
 - [All GitHub Releases](https://github.com/PsyCompasss/com-domain-filter-macos/releases)
 
@@ -283,7 +288,7 @@ If a registrar changes its page, a result is classified incorrectly, or the UI b
 
 <div align="center">
 
-**只查询 `.com` · 只保存完全一致且可注册的结果**
-**`.com` only · Exact-match available results only**
+**按所选后缀查询 · 只保存完整域名一致且明确可注册的结果**
+**Selected TLDs · Exact full-domain availability only**
 
 </div>

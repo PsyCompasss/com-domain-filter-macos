@@ -57,7 +57,7 @@ class DomainFilterApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.report_callback_exception = self._report_callback_exception
-        self.app_title = f"COM域名筛选器 v{__version__}"
+        self.app_title = f"全网域名筛选器 v{__version__}"
         self.root.title(self.app_title)
         self.root.geometry("1280x820")
         self.root.minsize(900, 590)

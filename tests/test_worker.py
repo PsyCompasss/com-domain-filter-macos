@@ -102,6 +102,21 @@ class RuleChangeChecker(FakeChecker):
         return super().query(domain)
 
 
+class MultiSuffixGroupChecker(FakeChecker):
+    calls = []
+
+    def query_group(self, stem, suffixes):
+        type(self).calls.append((stem, suffixes))
+        results = {}
+        for suffix in suffixes:
+            domain = f"{stem}{suffix}"
+            if suffix in {".com", ".cc"}:
+                results[domain] = QueryResult(domain, STATUS_EXACT_AVAILABLE, domain, True, True)
+            else:
+                results[domain] = QueryResult(domain, "exact_unavailable", domain, False, False)
+        return results
+
+
 class FastWaitEvent(threading.Event):
     def wait(self, timeout=None):
         return super().wait(0)
@@ -190,8 +205,8 @@ class WorkerTests(unittest.TestCase):
             )
             worker.start()
             self.assertTrue(BlockingChecker.started.wait(timeout=5))
-            current = next(payload["domain"] for kind, payload in events if kind == "current")
-            self.assertTrue(history.has_tested(current))
+            current = next(payload for kind, payload in events if kind == "current")
+            self.assertTrue(all(history.has_tested(domain) for domain in current["domains"]))
             worker.stop(keep_browser_open=True)
             BlockingChecker.release.set()
             worker.thread.join(timeout=5)
@@ -317,6 +332,160 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(len(RuleChangeChecker.domains[0].removesuffix(".com")), 4)
             self.assertEqual(len(RuleChangeChecker.domains[1].removesuffix(".com")), 10)
             self.assertTrue(any(kind == "status" and "新规则已生效" in payload["message"] for kind, payload in events))
+
+    def test_resume_applies_latest_suffix_pool_before_next_domain(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            RuleChangeChecker.started.clear()
+            RuleChangeChecker.release.clear()
+            RuleChangeChecker.domains = []
+            base = self.make_config(root, limit_tests=2)
+            config = RunConfig(
+                **{
+                    **base.__dict__,
+                    "prefix": "",
+                    "blocks": ({"kind": "unlimited", "value": "", "length": 4},),
+                    "domain_suffixes": (".com",),
+                }
+            )
+            worker = SearchWorker(
+                config,
+                HistoryStore(root / "state.db"),
+                lambda *_args: None,
+                checker_factory=RuleChangeChecker,
+            )
+            worker.start()
+            self.assertTrue(RuleChangeChecker.started.wait(timeout=5))
+            worker.pause()
+            RuleChangeChecker.release.set()
+            worker.update_rules(
+                config.characters,
+                config.blocks,
+                "independent",
+                domain_suffixes=(".net",),
+            )
+            worker.resume()
+            worker.thread.join(timeout=5)
+
+            self.assertEqual(RuleChangeChecker.domains[0].rsplit(".", 1)[1], "com")
+            self.assertEqual(RuleChangeChecker.domains[1].rsplit(".", 1)[1], "net")
+
+    def test_one_stem_query_records_all_selected_suffixes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            MultiSuffixGroupChecker.calls = []
+            base = self.make_config(root, limit_tests=1)
+            config = RunConfig(
+                **{
+                    **base.__dict__,
+                    "prefix": "",
+                    "blocks": ({"kind": "unlimited", "value": "", "length": 4},),
+                    "domain_suffixes": (".com", ".net", ".cc"),
+                }
+            )
+            history = HistoryStore(root / "state.db")
+            worker = SearchWorker(
+                config,
+                history,
+                lambda *_args: None,
+                checker_factory=MultiSuffixGroupChecker,
+            )
+            worker.start()
+            worker.thread.join(timeout=5)
+
+            self.assertFalse(worker.is_alive)
+            self.assertEqual(worker.checked, 1)
+            self.assertEqual(worker.found, 2)
+            self.assertEqual(len(MultiSuffixGroupChecker.calls), 1)
+            stem, suffixes = MultiSuffixGroupChecker.calls[0]
+            self.assertEqual(suffixes, (".com", ".net", ".cc"))
+            self.assertTrue(all(history.has_tested(f"{stem}{suffix}") for suffix in suffixes))
+            workbook = load_workbook(config.excel_path)
+            self.assertEqual(workbook[SHEET_NAME].max_row, 3)
+
+    def test_imported_domains_are_queried_in_file_order(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            RuleChangeChecker.started.clear()
+            RuleChangeChecker.release.set()
+            RuleChangeChecker.domains = []
+            base = self.make_config(root, limit_tests=3)
+            config = RunConfig(
+                **{
+                    **base.__dict__,
+                    "source_mode": "import",
+                    "imported_domains": ("third.com", "first.com", "second.com"),
+                }
+            )
+            worker = SearchWorker(
+                config,
+                HistoryStore(root / "state.db"),
+                lambda *_args: None,
+                checker_factory=RuleChangeChecker,
+            )
+            worker.start()
+            worker.thread.join(timeout=5)
+
+            self.assertFalse(worker.is_alive)
+            self.assertEqual(RuleChangeChecker.domains, ["third.com", "first.com", "second.com"])
+
+    def test_imported_com_names_query_all_selected_suffixes_in_one_group(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            MultiSuffixGroupChecker.calls = []
+            base = self.make_config(root, limit_tests=1)
+            config = RunConfig(
+                **{
+                    **base.__dict__,
+                    "source_mode": "import",
+                    "imported_domains": ("betel.com", "betas.com"),
+                    "domain_suffixes": (".com", ".net", ".cc"),
+                }
+            )
+            history = HistoryStore(root / "state.db")
+            worker = SearchWorker(
+                config,
+                history,
+                lambda *_args: None,
+                checker_factory=MultiSuffixGroupChecker,
+            )
+            worker.start()
+            worker.thread.join(timeout=5)
+
+            self.assertFalse(worker.is_alive)
+            self.assertEqual(MultiSuffixGroupChecker.calls, [("betel", (".com", ".net", ".cc"))])
+            self.assertTrue(all(history.has_tested(f"betel{suffix}") for suffix in (".com", ".net", ".cc")))
+
+    def test_resume_can_switch_from_generator_to_imported_domains(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            RuleChangeChecker.started.clear()
+            RuleChangeChecker.release.clear()
+            RuleChangeChecker.domains = []
+            base = self.make_config(root, limit_tests=2)
+            config = RunConfig(
+                **{
+                    **base.__dict__,
+                    "prefix": "",
+                    "blocks": ({"kind": "unlimited", "value": "", "length": 4},),
+                }
+            )
+            worker = SearchWorker(
+                config,
+                HistoryStore(root / "state.db"),
+                lambda *_args: None,
+                checker_factory=RuleChangeChecker,
+            )
+            worker.start()
+            self.assertTrue(RuleChangeChecker.started.wait(timeout=5))
+            worker.pause()
+            RuleChangeChecker.release.set()
+            worker.update_rules((), (), "independent", (), ("chosen.com",), "import")
+            worker.resume()
+            worker.thread.join(timeout=5)
+
+            self.assertFalse(worker.is_alive)
+            self.assertEqual(RuleChangeChecker.domains[1], "chosen.com")
 
 
 if __name__ == "__main__":

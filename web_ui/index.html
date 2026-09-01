@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>COM域名筛选器</title>
+  <title>全网域名筛选器</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="app" class="app-shell">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">C</span><span>COM域名筛选器</span></div>
+      <div class="brand"><span class="brand-mark">全</span><span>全网域名筛选器</span></div>
       <nav>
         <button class="nav-item active" data-page="rules"><span class="nav-icon">▦</span>生成规则</button>
         <button class="nav-item" data-page="run"><span class="nav-icon">⚙</span>运行设置</button>
@@ -18,14 +18,15 @@
       </nav>
       <div class="sidebar-foot">
         <div id="sideVersion">版本</div>
-        <p>仅查询 .com<br>结果自动去重并保存</p>
+        <p>按所选后缀查询<br>结果自动去重并保存</p>
+        <button id="homepageLink" class="homepage-link">GitHub 项目主页 ↗</button>
       </div>
     </aside>
 
     <main class="main">
       <header class="topbar">
         <div>
-          <div id="appVersion" class="eyebrow">COM域名筛选器</div>
+          <div id="appVersion" class="eyebrow">全网域名筛选器</div>
           <h1 id="pageTitle">生成规则</h1>
           <p id="pageSubtitle">用积木自由组合域名结构</p>
         </div>
@@ -39,21 +40,29 @@
       </header>
 
       <section id="page-rules" class="page active">
-        <div class="card compact">
-          <div class="card-head horizontal">
-            <div><h2>字符池</h2><p>选择随机组合可以使用的字符</p></div>
-            <div class="button-row">
-              <button class="btn small" data-char-action="all">全选</button>
-              <button class="btn small" data-char-action="letters">只选字母</button>
-              <button class="btn small" data-char-action="numbers">只选数字</button>
-              <button class="btn small" data-char-action="clear">清空</button>
-            </div>
+        <div class="rules-first-row">
+          <div class="card compact rule-tool-card">
+            <div class="card-head"><h2>后缀池</h2><p id="suffixSummary">已选择 .com</p></div>
+            <button id="openSuffixPool" class="btn primary full-tool-button">选择后缀…</button>
           </div>
-          <div id="characterPool" class="character-pool"></div>
-          <p class="hint">.com 主体允许英文字母、数字和半角连字符 -；连字符不能位于开头或结尾，下划线 _ 不合法。</p>
+
+          <div class="card compact rule-tool-card generator-only">
+            <div class="card-head"><h2>字符池</h2><p id="characterSummary">选择随机组合可以使用的字符</p></div>
+            <button id="openCharacterPool" class="btn primary full-tool-button">选择字符池…</button>
+          </div>
+
+          <div class="card compact rule-tool-card generator-only containment-card">
+            <div class="card-head"><h2>至少包含</h2><p>例如字符 8 至少出现 2 次</p></div>
+            <div class="containment-editor">
+              <input id="containmentValue" type="text" placeholder="字符" maxlength="1">
+              <input id="containmentMinimum" type="number" min="1" max="63" value="2" title="至少出现次数">
+              <button id="addContainment" class="btn">＋ 添加</button>
+            </div>
+            <div id="containmentList" class="containment-list"></div>
+          </div>
         </div>
 
-        <div class="card">
+        <div class="card generator-only">
           <div class="card-head horizontal">
             <div><h2>域名组合器</h2><p>从左到右依次拼接；可添加任意数量的组合块</p></div>
             <div class="button-row add-buttons">
@@ -78,14 +87,15 @@
           </div>
         </div>
 
-        <div class="card compact">
+        <div class="card compact generator-only">
           <div class="card-head horizontal">
-            <div><h2>快捷模板</h2><p>点击后添加为新的规律块</p></div>
+            <div><h2>快捷模板</h2><p>点击添加组合块；模板可以新增、保存和删除</p></div>
+            <button id="newQuickTemplate" class="btn small">＋ 新增模板</button>
           </div>
           <div id="quickPatterns" class="quick-patterns"></div>
         </div>
 
-        <details class="help-card">
+        <details class="help-card generator-only">
           <summary>💡 规律说明：相同字母代表相同字符，不同字母代表不同字符</summary>
           <p>例如 ABCDDDD 会生成三个互不相同的字符，第四个字符连续重复四次。固定文字和不限随机不参与 A/B/C 绑定。</p>
         </details>
@@ -128,14 +138,20 @@
           <div class="card">
             <div class="card-head"><h2>停止条件</h2><p>可以多选，任一条件先达到即停止</p></div>
             <label class="check-row"><input id="limitTestsEnabled" type="checkbox"><span>检测</span><input id="limitTests" type="number" min="1"><span>个域名后停止</span></label>
-            <label class="check-row"><input id="limitFoundEnabled" type="checkbox"><span>找到</span><input id="limitFound" type="number" min="1"><span>个完全一致且可注册的 .com 后停止</span></label>
+            <label class="check-row"><input id="limitFoundEnabled" type="checkbox"><span>找到</span><input id="limitFound" type="number" min="1"><span>个完全一致且可注册的域名后停止</span></label>
             <label class="check-row"><input id="runUntilStopped" type="checkbox"><span>一直运行，直到手动停止</span></label>
           </div>
 
-          <div class="card">
-            <div class="card-head"><h2>Excel 结果文件</h2><p>只保存完全一致且可注册的 .com，自动追加并去重</p></div>
-            <input id="excelPath" type="text" class="full-input">
-            <div class="button-row"><button id="chooseExcel" class="btn">选择路径…</button><button id="openExcel" class="btn">打开 Excel</button><button id="openFolder" class="btn">打开文件夹</button></div>
+          <div class="card source-card">
+            <div class="card-head"><h2>域名来源</h2><p>随机生成域名，或按照导入列表从上到下查询</p></div>
+            <div class="segmented source-segmented">
+              <button data-source-mode="generator" class="active">随机生成</button>
+              <button data-source-mode="import">导入域名</button>
+            </div>
+            <div id="importPanel" class="import-panel" hidden>
+              <div><strong id="importCount">尚未导入</strong><span id="importFile">支持 TXT、CSV、Excel</span></div>
+              <div class="button-row"><button id="importDomains" class="btn primary">导入域名文件…</button><button id="clearImportedDomains" class="btn danger" disabled>清空导入</button></div>
+            </div>
           </div>
 
           <div class="card full">
@@ -151,14 +167,12 @@
       </section>
 
       <section id="page-results" class="page">
-        <div class="stat-grid">
-          <div class="stat-card blue"><span>已保存域名</span><strong id="resultTotal">0</strong></div>
+        <div class="stat-grid result-stat-grid">
           <div class="stat-card green"><span>本次找到</span><strong id="resultFound">0</strong></div>
-          <div class="stat-card purple"><span>输出格式</span><strong>Excel</strong></div>
         </div>
         <div class="card results-card">
           <div class="card-head horizontal">
-            <div><h2>可注册域名</h2><p>仅显示名称完全一致且可注册的 .com</p></div>
+            <div><h2>可注册域名</h2><p>仅显示名称与目标完全一致且可注册的域名</p></div>
             <div class="button-row"><input id="resultSearch" type="search" placeholder="搜索域名、规律或网站"><button id="resultOpenFolder" class="btn">打开文件夹</button><button id="resultOpenExcel" class="btn primary">打开 Excel</button></div>
           </div>
           <div class="table-wrap"><table><thead><tr><th>域名</th><th>规律组合</th><th>查询网站</th><th>查询时间</th><th>状态</th></tr></thead><tbody id="resultBody"></tbody></table></div>
@@ -166,10 +180,9 @@
       </section>
 
       <section id="page-history" class="page">
-        <div class="stat-grid">
+        <div class="stat-grid history-stat-grid">
           <div class="stat-card blue"><span>已查询总数</span><strong id="historyTotal">0</strong></div>
           <div class="stat-card purple"><span>已选择</span><strong id="historySelected">0</strong></div>
-          <div class="stat-card green"><span>导出格式</span><strong>Excel</strong></div>
         </div>
         <div class="card results-card">
           <div class="card-head horizontal">
@@ -181,7 +194,7 @@
                 <option value="exact_available">名称一致且可注册</option>
                 <option value="exact_unavailable">名称一致但已注册</option>
                 <option value="available_mismatch">名称不一致</option>
-                <option value="no_com">未确认到 .com 结果</option>
+                <option value="no_com">未确认到目标后缀结果</option>
                 <option value="query_failed">查询失败</option>
                 <option value="query_started">查询未完成</option>
               </select>
@@ -213,11 +226,60 @@
         <div class="footer-divider"></div>
         <div class="footer-metric"><span>查询间隔</span><strong id="footerInterval">5 秒</strong></div>
         <div class="footer-task"><span>当前任务</span><strong id="footerTask">等待连接 Chrome</strong></div>
-        <button id="bottomStart" class="btn primary big" disabled>▶ 开始查询</button>
       </footer>
     </main>
   </div>
   <div id="toast" class="toast"></div>
+  <div id="characterModal" class="modal" hidden>
+    <div class="modal-panel character-modal-panel">
+      <div class="modal-head"><div><h2>选择字符池</h2><p>选择随机组合可以使用的字符</p></div><button class="modal-close" data-close-modal="characterModal">×</button></div>
+      <div class="button-row character-actions">
+        <button class="btn small" data-char-action="all">全选</button>
+        <button class="btn small" data-char-action="letters">只选字母</button>
+        <button class="btn small" data-char-action="numbers">只选数字</button>
+        <button class="btn small" data-char-action="clear">清空</button>
+      </div>
+      <div id="characterPool" class="character-pool"></div>
+      <p class="hint">域名主体允许英文字母、数字和半角连字符 -；连字符不能位于开头或结尾，下划线 _ 不合法。</p>
+      <div class="modal-actions"><button class="btn" data-close-modal="characterModal">取消</button><button id="confirmCharacterPool" class="btn primary">确定</button></div>
+    </div>
+  </div>
+  <div id="suffixModal" class="modal" hidden>
+    <div class="modal-panel suffix-modal-panel">
+      <div class="modal-head"><div><h2>选择后缀</h2><p>默认展示常用后缀；完整 IANA 目录仍然保留</p></div><button class="modal-close" data-close-modal="suffixModal">×</button></div>
+      <div id="suffixTabs" class="suffix-tabs" role="tablist">
+        <button class="suffix-tab active" data-suffix-group="common">常用后缀 <small>30</small></button>
+        <button class="suffix-tab" data-suffix-group="public">其他公开后缀</button>
+        <button class="suffix-tab" data-suffix-group="country">国家 / 地区</button>
+        <button class="suffix-tab" data-suffix-group="idn">国际化后缀</button>
+        <button class="suffix-tab" data-suffix-group="all">全部 IANA</button>
+      </div>
+      <div class="suffix-toolbar">
+        <input id="suffixSearch" type="search" placeholder="搜索后缀，例如 com、cn、shop">
+        <div class="button-row">
+          <button class="btn small" data-suffix-action="visible">全选本页</button>
+          <button class="btn small" data-suffix-action="clear">清空</button>
+        </div>
+      </div>
+      <div id="suffixPoolCount" class="suffix-pool-count"></div>
+      <div id="suffixPool" class="suffix-pool"></div>
+      <p class="hint">“全部 IANA”包含品牌、受限和基础设施后缀；能否查询和注册以所选网站的实际结果为准。</p>
+      <div class="modal-actions"><button class="btn" data-close-modal="suffixModal">取消</button><button id="confirmSuffixPool" class="btn primary">确定</button></div>
+    </div>
+  </div>
+  <div id="templateModal" class="modal" hidden>
+    <div class="modal-panel template-modal-panel">
+      <div class="modal-head"><div><h2>保存快捷模板</h2><p>以后可以一键添加这个组合块</p></div><button class="modal-close" data-close-modal="templateModal">×</button></div>
+      <div class="field-grid template-fields">
+        <label>模板名称</label><input id="templateName" type="text" placeholder="例如：双8">
+        <label>模板类型</label><select id="templateKind"><option value="custom">自定义规律</option><option value="common">常用规律</option><option value="fixed">固定文字</option><option value="unlimited">不限随机</option></select>
+        <label>内容 / 规律</label><input id="templateValue" type="text" placeholder="例如 AA">
+        <label>随机长度</label><input id="templateLength" type="number" min="1" max="63" value="4">
+      </div>
+      <div class="modal-actions"><button class="btn" data-close-modal="templateModal">取消</button><button id="saveQuickTemplate" class="btn primary">保存模板</button></div>
+    </div>
+  </div>
+  <div id="domainContextMenu" class="context-menu" hidden><button id="copyDomain">复制</button></div>
   <script src="app.js"></script>
 </body>
 </html>

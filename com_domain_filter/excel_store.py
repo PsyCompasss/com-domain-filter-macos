@@ -9,6 +9,8 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from .tlds import ascii_domain, unicode_domain
+
 
 SHEET_NAME = "可注册COM域名"
 HEADERS = ("域名", "查询时间", "规律", "固定开头", "固定结尾", "查询网站")
@@ -18,7 +20,7 @@ STATUS_LABELS = {
     "exact_available": "名称完全一致且可注册",
     "available_mismatch": "可注册但名称不一致",
     "exact_unavailable": "名称完全一致但已注册",
-    "no_com": "未确认到 .com 结果",
+    "no_com": "未确认到目标后缀结果",
     "query_started": "查询未完成",
     "query_failed": "查询失败",
 }
@@ -85,13 +87,14 @@ class ExcelStore:
         site: str,
     ) -> bool:
         workbook, sheet = self._load_or_create()
-        normalized = domain.lower()
+        normalized = unicode_domain(domain)
+        normalized_key = ascii_domain(normalized)
         existing = {
-            str(sheet.cell(row, 1).value).strip().lower()
+            ascii_domain(str(sheet.cell(row, 1).value))
             for row in range(2, sheet.max_row + 1)
             if sheet.cell(row, 1).value
         }
-        if normalized in existing:
+        if normalized_key in existing:
             return False
         try:
             time_value = datetime.fromisoformat(checked_at)
@@ -157,6 +160,7 @@ class HistoryExcelStore:
         sheet.row_dimensions[1].height = 25
 
         for domain, status, checked_at, pattern, prefix, suffix, detail, site in rows:
+            domain = unicode_domain(domain)
             try:
                 time_value = datetime.fromisoformat(checked_at)
                 if time_value.tzinfo is not None:

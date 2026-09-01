@@ -31,7 +31,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='COM域名筛选器',
+    name='全网域名筛选器',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -50,16 +50,16 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='COM域名筛选器',
+    name='全网域名筛选器',
 )
 app = BUNDLE(
     coll,
-    name='COM域名筛选器.app',
+    name='全网域名筛选器.app',
     icon='assets/app-icon-b-v2.icns',
     bundle_identifier='com.psycompass.com-domain-filter',
     info_plist={
-        'CFBundleShortVersionString': '1.5.2',
-        'CFBundleVersion': '1.5.2',
+        'CFBundleShortVersionString': '1.8.3',
+        'CFBundleVersion': '1.8.3',
         'NSHighResolutionCapable': True,
     },
 )

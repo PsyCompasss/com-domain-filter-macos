@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
+from .tlds import ascii_tld, unicode_tld
+
 
 PATTERNS: tuple[str, ...] = (
     "不限", "AAA", "AAAA", "AAAAA", "AAAB", "ABC", "ABCD", "ABCDE",
@@ -18,6 +20,7 @@ ALLOWED_CHARACTERS = "abcdefghijklmnopqrstuvwxyz0123456789-"
 CUSTOM_RE = re.compile(r"^[a-z0-9-]*$")
 CUSTOM_PATTERN_RE = re.compile(r"^[A-Z]+$")
 DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+DOMAIN_SUFFIX_RE = re.compile(r"^\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 BLOCK_FIXED = "fixed"
 BLOCK_COMMON = "common"
@@ -48,6 +51,23 @@ def normalize_pattern(value: str) -> str:
     return normalized
 
 
+def normalize_domain_suffixes(values: Iterable[str]) -> tuple[str, ...]:
+    suffixes: list[str] = []
+    for raw in values:
+        value = str(raw).strip().lower()
+        if not value:
+            continue
+        suffix = value if value.startswith(".") else f".{value}"
+        ascii_suffix = ascii_tld(suffix)
+        if not DOMAIN_SUFFIX_RE.fullmatch(ascii_suffix):
+            raise PatternConfigurationError(f"域名后缀“{raw}”格式不正确。")
+        suffixes.append(unicode_tld(suffix))
+    normalized = tuple(dict.fromkeys(suffixes))
+    if not normalized:
+        raise PatternConfigurationError("请至少选择一个域名后缀。")
+    return normalized
+
+
 def unique_placeholders(pattern: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(pattern))
 
@@ -57,6 +77,7 @@ class PatternBlock:
     kind: str
     value: str = ""
     length: int = 1
+    random_position: bool = False
 
     @classmethod
     def from_dict(cls, payload: dict) -> "PatternBlock":
@@ -64,24 +85,30 @@ class PatternBlock:
             kind=str(payload.get("kind", BLOCK_COMMON)),
             value=str(payload.get("value", "AAA")),
             length=int(payload.get("length", 1)),
+            random_position=bool(payload.get("random_position", False)),
         )
 
     def to_dict(self) -> dict[str, object]:
-        return {"kind": self.kind, "value": self.value, "length": self.length}
+        return {
+            "kind": self.kind,
+            "value": self.value,
+            "length": self.length,
+            "random_position": self.random_position,
+        }
 
     def normalized(self) -> "PatternBlock":
         if self.kind not in BLOCK_TYPES:
             raise PatternConfigurationError(f"未知组合块类型：{self.kind}")
         if self.kind == BLOCK_FIXED:
-            return PatternBlock(self.kind, normalize_custom(self.value), 1)
+            return PatternBlock(self.kind, normalize_custom(self.value), 1, self.random_position)
         if self.kind in (BLOCK_COMMON, BLOCK_CUSTOM):
             pattern = normalize_pattern(self.value)
             if self.kind == BLOCK_COMMON and pattern not in PATTERNS:
                 raise PatternConfigurationError(f"未知常用规律：{pattern}")
-            return PatternBlock(self.kind, pattern, 1)
+            return PatternBlock(self.kind, pattern, 1, self.random_position)
         if not isinstance(self.length, int) or self.length < 1:
             raise PatternConfigurationError("不限随机块的长度必须是正整数。")
-        return PatternBlock(self.kind, "", self.length)
+        return PatternBlock(self.kind, "", self.length, False)
 
     @property
     def output_length(self) -> int:
@@ -107,6 +134,39 @@ class GeneratedDomain:
     domain: str
     pattern: str
     random_part: str
+    stem: str = ""
+    domains: tuple[str, ...] = ()
+
+    @property
+    def query_stem(self) -> str:
+        return self.stem or self.domain.rsplit(".", 1)[0]
+
+    @property
+    def query_domains(self) -> tuple[str, ...]:
+        return self.domains or (self.domain,)
+
+
+@dataclass(frozen=True)
+class ContainmentRule:
+    value: str
+    minimum: int = 1
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "ContainmentRule":
+        return cls(str(payload.get("value", "")), int(payload.get("minimum", 1)))
+
+    def to_dict(self) -> dict[str, object]:
+        return {"value": self.value, "minimum": self.minimum}
+
+    def normalized(self) -> "ContainmentRule":
+        value = normalize_custom(self.value)
+        if not value:
+            raise PatternConfigurationError("“至少包含”的字符不能为空。")
+        if len(value) != 1:
+            raise PatternConfigurationError("“至少包含”每条只能填写一个字母、数字或连字符。")
+        if self.minimum < 1:
+            raise PatternConfigurationError("“至少包含”的次数必须大于 0。")
+        return ContainmentRule(value, self.minimum)
 
 
 class BlockPatternGenerator:
@@ -115,6 +175,8 @@ class BlockPatternGenerator:
         characters: Iterable[str],
         blocks: Sequence[PatternBlock | dict],
         binding_mode: str = BIND_INDEPENDENT,
+        containment_rules: Sequence[ContainmentRule | dict] = (),
+        domain_suffixes: Sequence[str] = (".com",),
         rng: random.Random | None = None,
     ) -> None:
         self.characters = tuple(dict.fromkeys(c.lower() for c in characters))
@@ -123,6 +185,11 @@ class BlockPatternGenerator:
             for item in blocks
         )
         self.binding_mode = binding_mode
+        self.containment_rules = tuple(
+            (item if isinstance(item, ContainmentRule) else ContainmentRule.from_dict(item)).normalized()
+            for item in containment_rules
+        )
+        self.domain_suffixes = normalize_domain_suffixes(domain_suffixes)
         self.rng = rng or random.SystemRandom()
         self.validate()
 
@@ -140,11 +207,21 @@ class BlockPatternGenerator:
             raise PatternConfigurationError("域名主体不能为空。")
         if total_length > 63:
             raise PatternConfigurationError(f"当前组合长度为 {total_length}，超过域名标签的63字符限制。")
+        for rule in self.containment_rules:
+            if len(rule.value) * rule.minimum > total_length:
+                raise PatternConfigurationError(
+                    f"当前域名只有 {total_length} 位，无法至少包含 {rule.minimum} 次“{rule.value}”。"
+                )
+            fixed_count = sum(block.value.count(rule.value) for block in self.blocks if block.kind == BLOCK_FIXED)
+            if rule.value not in self.characters and fixed_count < rule.minimum:
+                raise PatternConfigurationError(
+                    f"字符池中没有“{rule.value}”，固定文字中也不足 {rule.minimum} 个。"
+                )
         first = self.blocks[0]
         last = self.blocks[-1]
-        if first.kind == BLOCK_FIXED and first.value.startswith("-"):
+        if first.kind == BLOCK_FIXED and not first.random_position and first.value.startswith("-"):
             raise PatternConfigurationError("域名不能以连字符 - 开头。")
-        if last.kind == BLOCK_FIXED and last.value.endswith("-"):
+        if last.kind == BLOCK_FIXED and not last.random_position and last.value.endswith("-"):
             raise PatternConfigurationError("域名不能以连字符 - 结尾。")
         pattern_blocks = [block for block in self.blocks if block.kind in (BLOCK_COMMON, BLOCK_CUSTOM)]
         if self.binding_mode == BIND_SHARED:
@@ -175,6 +252,8 @@ class BlockPatternGenerator:
                 )
                 shared_mapping = self._mapping_for(combined)
             pieces: list[str] = []
+            unlimited_piece_indexes: list[int] = []
+            floating_pieces: list[str] = []
             random_pieces: list[str] = []
             for block in self.blocks:
                 if block.kind == BLOCK_FIXED:
@@ -186,13 +265,45 @@ class BlockPatternGenerator:
                     mapping = shared_mapping if self.binding_mode == BIND_SHARED else self._mapping_for(block.value)
                     piece = "".join(mapping[item] for item in block.value)
                     random_pieces.append(piece)
-                pieces.append(piece)
-            label = "".join(pieces)
-            if DOMAIN_LABEL_RE.fullmatch(label):
+                if block.kind != BLOCK_UNLIMITED and block.random_position:
+                    floating_pieces.append(piece)
+                else:
+                    if block.kind == BLOCK_UNLIMITED:
+                        unlimited_piece_indexes.append(len(pieces))
+                    pieces.append(piece)
+            for rule in self.containment_rules:
+                current_count = sum(piece.count(rule.value) for piece in pieces + floating_pieces)
+                deficit = rule.minimum - current_count
+                if deficit <= 0:
+                    continue
+                candidates = [
+                    (piece_index, character_index)
+                    for piece_index in unlimited_piece_indexes
+                    for character_index, character in enumerate(pieces[piece_index])
+                    if character != rule.value
+                ]
+                if len(candidates) >= deficit:
+                    for piece_index, character_index in self.rng.sample(candidates, deficit):
+                        piece = pieces[piece_index]
+                        pieces[piece_index] = f"{piece[:character_index]}{rule.value}{piece[character_index + 1:]}"
+            label_tokens = list("".join(pieces))
+            for piece in floating_pieces:
+                position = self.rng.randrange(len(label_tokens) + 1)
+                label_tokens.insert(position, piece)
+            label = "".join(label_tokens)
+            contains_required = all(
+                label.count(rule.value) >= rule.minimum for rule in self.containment_rules
+            )
+            if DOMAIN_LABEL_RE.fullmatch(label) and contains_required:
+                domains = tuple(f"{label}{suffix}" for suffix in self.domain_suffixes)
                 return GeneratedDomain(
-                    domain=f"{label}.com",
+                    # ``domain`` 保留首个完整域名，兼容旧界面和旧测试；真正查询时
+                    # 使用 ``query_stem`` 和 ``query_domains``，同一主体只搜索一次。
+                    domain=domains[0],
                     pattern=" + ".join(block.description for block in self.blocks),
                     random_part="".join(random_pieces),
+                    stem=label,
+                    domains=domains,
                 )
         raise PatternConfigurationError("当前字符和组合规则无法生成首尾合法的域名，请增加字母或数字。")
 
@@ -214,6 +325,69 @@ class BlockPatternGenerator:
             elif block.kind in (BLOCK_COMMON, BLOCK_CUSTOM):
                 size *= math.perm(n, len(unique_placeholders(block.value)))
         return size
+
+
+def normalize_imported_domains(
+    values: Iterable[str],
+    domain_suffixes: Sequence[str] = (".com",),
+) -> tuple[str, ...]:
+    selected_suffixes = normalize_domain_suffixes(domain_suffixes)
+    domains: list[str] = []
+    for raw in values:
+        value = str(raw).strip().lower()
+        if not value:
+            continue
+        value = re.sub(r"^https?://", "", value).split("/", 1)[0].strip(".")
+        if "." in value:
+            label, raw_suffix = value.rsplit(".", 1)
+            suffixes = (unicode_tld(f".{raw_suffix}"),)
+            if suffixes[0] not in selected_suffixes:
+                raise PatternConfigurationError(f"导入项“{raw}”的后缀不在已选后缀池中。")
+        else:
+            label = value
+            suffixes = selected_suffixes
+        if not DOMAIN_LABEL_RE.fullmatch(label):
+            raise PatternConfigurationError(f"导入项“{raw}”不是合法的域名主体。")
+        domains.extend(f"{label}{suffix}" for suffix in suffixes)
+    normalized = tuple(dict.fromkeys(domains))
+    if not normalized:
+        raise PatternConfigurationError("导入文件中没有可查询的域名。")
+    return normalized
+
+
+class ImportedDomainGenerator:
+    def __init__(self, domains: Iterable[str], domain_suffixes: Sequence[str] = (".com",)) -> None:
+        selected_suffixes = normalize_domain_suffixes(domain_suffixes)
+        self.domains = normalize_imported_domains(domains, domain_suffixes)
+        stems: dict[str, None] = {}
+        for domain in self.domains:
+            stem, _raw_suffix = domain.rsplit(".", 1)
+            stems.setdefault(stem, None)
+
+        # 导入文件决定“查询哪些名称”，后缀池决定“每个名称查询哪些后缀”。
+        # 即使文件里写的是 alpha.com，只要后缀池选中了 .com/.net/.cc，
+        # 也应当只搜索一次 alpha，并在同一结果页确认这三个完整域名。
+        self.groups = tuple(
+            (stem, tuple(f"{stem}{suffix}" for suffix in selected_suffixes))
+            for stem in stems
+        )
+        self.index = 0
+
+    def generate(self) -> GeneratedDomain:
+        if self.index >= len(self.groups):
+            raise StopIteration
+        stem, domains = self.groups[self.index]
+        self.index += 1
+        return GeneratedDomain(
+            domain=domains[0],
+            pattern="导入域名",
+            random_part=stem,
+            stem=stem,
+            domains=domains,
+        )
+
+    def estimated_space(self) -> int:
+        return len(self.groups)
 
 
 class PatternGenerator:
